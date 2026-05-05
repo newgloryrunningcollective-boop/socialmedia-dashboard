@@ -1,8 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { motion } from "framer-motion";
-import { useSearchParams } from "next/navigation";
 
 type Tab = "Home" | "Statistics" | "Planning";
 type Range = "Day" | "Week" | "Month" | "Year";
@@ -45,19 +44,31 @@ const initialPlan: CalendarItem[] = [
 export default function DashboardPage() {
   const [activeTab, setActiveTab] = useState<Tab>("Home");
 
-  const searchParams = useSearchParams();
-  const metaConnected = searchParams.get("meta_connected") === "1";
-  const metaError = searchParams.get("meta_error");
-  const pagesParam = searchParams.get("pages");
+  const [metaConnected, setMetaConnected] = useState(false);
+  const [metaError, setMetaError] = useState<string | null>(null);
+  const [connectedPages, setConnectedPages] = useState<ConnectedPage[]>([]);
 
-  let connectedPages: ConnectedPage[] = [];
-  if (pagesParam) {
-    try {
-      connectedPages = JSON.parse(decodeURIComponent(pagesParam));
-    } catch {
-      connectedPages = [];
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+
+    const connected = params.get("meta_connected") === "1";
+    const error = params.get("meta_error");
+    const pagesParam = params.get("pages");
+
+    setMetaConnected(connected);
+    setMetaError(error);
+
+    if (pagesParam) {
+      try {
+        const parsed = JSON.parse(decodeURIComponent(pagesParam));
+        setConnectedPages(parsed);
+      } catch {
+        setConnectedPages([]);
+      }
+    } else {
+      setConnectedPages([]);
     }
-  }
+  }, []);
 
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top_right,#312e81_0%,#0b1020_35%,#070b16_70%)] p-6 text-slate-100">
@@ -95,7 +106,7 @@ export default function DashboardPage() {
   );
 }
 
-function PremiumCard({ children }: { children: React.ReactNode }) {
+function PremiumCard({ children }: { children: ReactNode }) {
   return (
     <section className="rounded-2xl border border-white/10 bg-white/5 p-5 shadow-[0_12px_48px_rgba(76,29,149,0.25)] backdrop-blur-xl">
       {children}
