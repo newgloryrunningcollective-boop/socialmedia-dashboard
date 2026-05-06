@@ -47,6 +47,29 @@ type MetaMetricsResponse = {
   metrics?: MetaMetric[];
 };
 
+type InstagramProfileGroup = "personal" | "newglory";
+
+type InstagramProfileMetric = {
+  ok?: boolean;
+  message?: string;
+  profileGroup: InstagramProfileGroup;
+  instagramUserId: string;
+  username: string | null;
+  name: string | null;
+  accountType: string | null;
+  profilePictureUrl: string | null;
+  followersCount: number | null;
+  followsCount: number | null;
+  mediaCount: number | null;
+  connectedAt: number;
+};
+
+type InstagramMetricsResponse = {
+  ok: boolean;
+  message?: string;
+  profiles?: InstagramProfileMetric[];
+};
+
 type LinkedInMetricsResponse = {
   ok: boolean;
   message?: string;
@@ -82,6 +105,7 @@ type TikTokMetricsResponse = {
 
 type LiveMetricsState = {
   meta: MetaMetricsResponse | null;
+  instagram: InstagramMetricsResponse | null;
   linkedin: LinkedInMetricsResponse | null;
   tiktok: TikTokMetricsResponse | null;
   loading: boolean;
@@ -93,6 +117,9 @@ type ConnectionSummary = {
   metaConnected: boolean;
   metaError: string | null;
   connectedPages: ConnectedPage[];
+  instagramConnected: boolean;
+  instagramProfile: string | null;
+  instagramError: string | null;
   linkedInConnected: boolean;
   linkedInError: boolean;
   tikTokConnected: boolean;
@@ -116,6 +143,7 @@ const connectedProfiles = {
 
 const initialLiveMetrics: LiveMetricsState = {
   meta: null,
+  instagram: null,
   linkedin: null,
   tiktok: null,
   loading: true,
@@ -155,6 +183,7 @@ function parseConnectedPages(value: string | string[] | undefined) {
 }
 
 function parseConnectionSummary(params: Record<string, string | string[] | undefined>): ConnectionSummary {
+  const instagramStatus = firstParam(params.instagram_connected);
   const linkedInStatus = firstParam(params.linkedin_connected);
   const tikTokStatus = firstParam(params.tiktok_connected);
 
@@ -162,6 +191,12 @@ function parseConnectionSummary(params: Record<string, string | string[] | undef
     metaConnected: firstParam(params.meta_connected) === "1",
     metaError: firstParam(params.meta_error) ?? null,
     connectedPages: parseConnectedPages(params.pages),
+    instagramConnected: instagramStatus === "1",
+    instagramProfile: firstParam(params.instagram_profile) ?? null,
+    instagramError:
+      instagramStatus === "0"
+        ? firstParam(params.instagram_error) ?? "Instagram connection failed."
+        : null,
     linkedInConnected: linkedInStatus === "1",
     linkedInError: linkedInStatus === "0",
     tikTokConnected: tikTokStatus === "1",
@@ -191,8 +226,12 @@ function useLiveMetrics(): LiveMetricsState {
     let cancelled = false;
 
     async function loadMetrics() {
-      const [meta, linkedin, tiktok] = await Promise.all([
+      const [meta, instagram, linkedin, tiktok] = await Promise.all([
         fetchJson<MetaMetricsResponse>("/api/meta/metrics").catch((error: Error) => ({
+          ok: false,
+          message: error.message,
+        })),
+        fetchJson<InstagramMetricsResponse>("/api/instagram/metrics").catch((error: Error) => ({
           ok: false,
           message: error.message,
         })),
@@ -207,7 +246,7 @@ function useLiveMetrics(): LiveMetricsState {
       ]);
 
       if (!cancelled) {
-        setMetrics({ meta, linkedin, tiktok, loading: false });
+        setMetrics({ meta, instagram, linkedin, tiktok, loading: false });
       }
     }
 
@@ -230,6 +269,13 @@ function findNewGloryMeta(metrics: MetaMetric[] | undefined) {
       igUsername === normalizeHandle(connectedProfiles.newGlory.instagram)
     );
   });
+}
+
+function findInstagramProfile(
+  profiles: InstagramProfileMetric[] | undefined,
+  profileGroup: InstagramProfileGroup
+) {
+  return profiles?.find((profile) => profile.profileGroup === profileGroup);
 }
 
 function findLinkedInOrganization(
@@ -299,6 +345,9 @@ function HomeTab({
   metaConnected,
   metaError,
   connectedPages,
+  instagramConnected,
+  instagramProfile,
+  instagramError,
   linkedInConnected,
   linkedInError,
   tikTokConnected,
@@ -307,6 +356,9 @@ function HomeTab({
   metaConnected: boolean;
   metaError: string | null;
   connectedPages: ConnectedPage[];
+  instagramConnected: boolean;
+  instagramProfile: string | null;
+  instagramError: string | null;
   linkedInConnected: boolean;
   linkedInError: boolean;
   tikTokConnected: boolean;
@@ -316,14 +368,24 @@ function HomeTab({
   const [newTask, setNewTask] = useState("");
   const liveMetrics = useLiveMetrics();
   const newGloryMeta = findNewGloryMeta(liveMetrics.meta?.metrics);
+  const personalInstagram = findInstagramProfile(
+    liveMetrics.instagram?.profiles,
+    "personal"
+  );
+  const newGloryInstagram = findInstagramProfile(
+    liveMetrics.instagram?.profiles,
+    "newglory"
+  );
   const linkedInOrganization = findLinkedInOrganization(
     liveMetrics.linkedin?.identity?.organizations
   );
   const tikTokUser = liveMetrics.tiktok?.profile?.data?.user;
   const totalKnownFollowers =
-    (newGloryMeta?.igFollowersCount ?? 0) +
+    (personalInstagram?.followersCount ?? 0) +
+    (newGloryInstagram?.followersCount ?? newGloryMeta?.igFollowersCount ?? 0) +
     (newGloryMeta?.fbFollowersCount ?? newGloryMeta?.fbFanCount ?? 0);
   const connectedPlatformCount = [
+    Boolean(personalInstagram || newGloryInstagram),
     Boolean(newGloryMeta),
     Boolean(liveMetrics.linkedin?.identity),
     Boolean(tikTokUser),
@@ -344,7 +406,7 @@ function HomeTab({
 
   const kpis = [
     { label: "Known Live Followers", value: liveMetrics.loading ? "Loading..." : formatStat(totalKnownFollowers) },
-    { label: "Connected Sources", value: liveMetrics.loading ? "Loading..." : `${connectedPlatformCount}/3` },
+    { label: "Connected Sources", value: liveMetrics.loading ? "Loading..." : `${connectedPlatformCount}/4` },
     { label: "Live Data Status", value: liveMetrics.loading ? "Loading..." : "Ready" },
   ];
 
@@ -427,11 +489,39 @@ function HomeTab({
 
       <LiveAccountsPanel
         liveMetrics={liveMetrics}
+        personalInstagram={personalInstagram}
+        newGloryInstagram={newGloryInstagram}
         newGloryMeta={newGloryMeta}
         linkedInOrganization={linkedInOrganization}
       />
 
-      <div className="grid gap-4 lg:grid-cols-3">
+      <div className="grid gap-4 lg:grid-cols-4">
+        <PremiumCard>
+          <h2 className="mb-3 text-lg font-medium">Connected Instagram Accounts</h2>
+          {instagramConnected && (
+            <p className="mb-2 text-sm text-emerald-300">
+              Instagram {instagramProfile ?? "account"} connected successfully
+            </p>
+          )}
+          {instagramError && (
+            <p className="mb-2 text-sm text-red-300">Instagram connection failed: {instagramError}</p>
+          )}
+          <div className="space-y-2">
+            <a
+              href="/api/connect/instagram?profile=personal"
+              className="inline-flex w-full justify-center rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium hover:bg-indigo-400"
+            >
+              Connect Personal Instagram
+            </a>
+            <a
+              href="/api/connect/instagram?profile=newglory"
+              className="inline-flex w-full justify-center rounded-lg bg-white/10 px-4 py-2 text-sm font-medium hover:bg-white/15"
+            >
+              Connect New Glory Instagram
+            </a>
+          </div>
+        </PremiumCard>
+
         <PremiumCard>
           <h2 className="mb-3 text-lg font-medium">Connected Meta Accounts</h2>
 
@@ -522,15 +612,21 @@ function HomeTab({
 
 function LiveAccountsPanel({
   liveMetrics,
+  personalInstagram,
+  newGloryInstagram,
   newGloryMeta,
   linkedInOrganization,
 }: {
   liveMetrics: LiveMetricsState;
+  personalInstagram: InstagramProfileMetric | undefined;
+  newGloryInstagram: InstagramProfileMetric | undefined;
   newGloryMeta: MetaMetric | undefined;
   linkedInOrganization: { id: string; name: string } | undefined;
 }) {
   const linkedInProfile = liveMetrics.linkedin?.identity?.personalProfile;
   const tikTokUser = liveMetrics.tiktok?.profile?.data?.user;
+  const newGloryInstagramUsername =
+    newGloryInstagram?.username ?? newGloryMeta?.igUsername ?? null;
 
   return (
     <PremiumCard>
@@ -548,22 +644,64 @@ function LiveAccountsPanel({
         <AccountStatCard
           group="Personal"
           platform="Instagram"
-          account={connectedProfiles.personal.instagram}
-          status="Listed"
+          account={
+            personalInstagram?.username
+              ? `@${personalInstagram.username}`
+              : connectedProfiles.personal.instagram
+          }
+          status={personalInstagram ? "Live" : "Connect Instagram"}
+          href={
+            personalInstagram?.username
+              ? `https://www.instagram.com/${personalInstagram.username}/`
+              : undefined
+          }
+          actionHref={personalInstagram ? undefined : "/api/connect/instagram?profile=personal"}
+          actionLabel="Connect Personal Instagram"
           stats={[
-            ["Followers", "Needs Instagram business/creator API access"],
-            ["Media", "Not available from current connection"],
+            ["Followers", formatStat(personalInstagram?.followersCount)],
+            ["Following", formatStat(personalInstagram?.followsCount)],
+            ["Media", formatStat(personalInstagram?.mediaCount)],
+            ["Type", personalInstagram?.accountType ?? "Business account required"],
           ]}
         />
 
         <AccountStatCard
           group="New Glory"
           platform="Instagram"
-          account={newGloryMeta?.igUsername ? `@${newGloryMeta.igUsername}` : connectedProfiles.newGlory.instagram}
-          status={newGloryMeta?.igBusinessId ? "Live" : "Connect Meta"}
+          account={
+            newGloryInstagram?.username
+              ? `@${newGloryInstagram.username}`
+              : newGloryInstagramUsername
+                ? `@${newGloryInstagramUsername}`
+                : connectedProfiles.newGlory.instagram
+          }
+          status={
+            newGloryInstagram
+              ? "Live"
+              : newGloryMeta?.igBusinessId
+                ? "Live via Meta"
+                : "Connect Instagram"
+          }
+          href={
+            newGloryInstagramUsername
+              ? `https://www.instagram.com/${newGloryInstagramUsername}/`
+              : undefined
+          }
+          actionHref={newGloryInstagram ? undefined : "/api/connect/instagram?profile=newglory"}
+          actionLabel="Connect New Glory Instagram"
           stats={[
-            ["Followers", formatStat(newGloryMeta?.igFollowersCount)],
-            ["Media", formatStat(newGloryMeta?.igMediaCount)],
+            [
+              "Followers",
+              formatStat(
+                newGloryInstagram?.followersCount ?? newGloryMeta?.igFollowersCount
+              ),
+            ],
+            ["Following", formatStat(newGloryInstagram?.followsCount)],
+            [
+              "Media",
+              formatStat(newGloryInstagram?.mediaCount ?? newGloryMeta?.igMediaCount),
+            ],
+            ["Type", newGloryInstagram?.accountType ?? "Business account required"],
           ]}
         />
 
@@ -625,6 +763,8 @@ function AccountStatCard({
   status,
   stats,
   href,
+  actionHref,
+  actionLabel,
 }: {
   group: string;
   platform: string;
@@ -632,6 +772,8 @@ function AccountStatCard({
   status: string;
   stats: Array<[string, string]>;
   href?: string;
+  actionHref?: string;
+  actionLabel?: string;
 }) {
   return (
     <article className="rounded-lg border border-white/10 bg-black/20 p-4">
@@ -652,11 +794,18 @@ function AccountStatCard({
         ))}
       </dl>
 
-      {href && (
-        <a href={href} target="_blank" rel="noreferrer" className="mt-3 inline-flex text-sm text-indigo-300 underline">
-          Open profile
-        </a>
-      )}
+      <div className="mt-3 flex flex-wrap gap-3">
+        {href && (
+          <a href={href} target="_blank" rel="noreferrer" className="text-sm text-indigo-300 underline">
+            Open profile
+          </a>
+        )}
+        {actionHref && actionLabel && (
+          <a href={actionHref} className="text-sm text-indigo-300 underline">
+            {actionLabel}
+          </a>
+        )}
+      </div>
     </article>
   );
 }

@@ -44,6 +44,10 @@ type MetaAccountsResponse = MetaApiError & {
   data?: MetaGraphPage[];
 };
 
+type MetaInstagramAccountResponse = MetaApiError & {
+  instagram_business_account?: MetaGraphInstagramBusinessAccount | null;
+};
+
 type MetaFanCountResponse = MetaApiError & {
   fan_count?: number;
 };
@@ -93,6 +97,26 @@ async function getPageFanCount(pageId: string, pageAccessToken: string) {
   const { ok, json } = await fetchMetaJson<MetaFanCountResponse>(url);
   if (!ok) return null;
   return typeof json.fan_count === "number" ? json.fan_count : null;
+}
+
+async function enrichPageWithInstagramAccount(page: MetaGraphPage) {
+  const pageId = stringId(page.id);
+  const pageAccessToken =
+    typeof page.access_token === "string" ? page.access_token : "";
+
+  if (!pageId || !pageAccessToken) return page;
+
+  const url = new URL(`https://graph.facebook.com/v20.0/${pageId}`);
+  url.searchParams.set("fields", "instagram_business_account{id,username}");
+  url.searchParams.set("access_token", pageAccessToken);
+
+  const { ok, json } = await fetchMetaJson<MetaInstagramAccountResponse>(url);
+  if (!ok) return page;
+
+  return {
+    ...page,
+    instagram_business_account: json.instagram_business_account ?? null,
+  };
 }
 
 function normalizeStoredPage(page: MetaGraphPage): StoredPage | null {
@@ -195,10 +219,7 @@ export async function GET(req: NextRequest) {
 
   const pagesUrl = new URL("https://graph.facebook.com/v20.0/me/accounts");
   pagesUrl.searchParams.set("access_token", userAccessToken);
-  pagesUrl.searchParams.set(
-    "fields",
-    "id,name,access_token,instagram_business_account{id,username}"
-  );
+  pagesUrl.searchParams.set("fields", "id,name,access_token");
 
   const pagesResult = await fetchMetaJson<MetaAccountsResponse>(pagesUrl);
 
@@ -212,11 +233,12 @@ export async function GET(req: NextRequest) {
   const rawPages = Array.isArray(pagesResult.json.data)
     ? pagesResult.json.data
     : [];
-  const storedPages = rawPages
+  const pages = await Promise.all(rawPages.map(enrichPageWithInstagramAccount));
+  const storedPages = pages
     .map(normalizeStoredPage)
     .filter((page): page is StoredPage => Boolean(page));
   const connectedPages = (
-    await Promise.all(rawPages.map(normalizeConnectedPage))
+    await Promise.all(pages.map(normalizeConnectedPage))
   ).filter((page): page is ConnectedPage => Boolean(page));
 
   const response = redirectWithMetaStatus(appBaseUrl, {
