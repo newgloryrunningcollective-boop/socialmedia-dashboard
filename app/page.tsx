@@ -366,11 +366,20 @@ function getContentSourceClasses(sourceType: InstagramContentSource) {
 }
 
 function getProfileContent(profile: InstagramProfileMetric) {
-  return [...(profile.media ?? []), ...(profile.stories ?? [])].sort((a, b) => {
-    const aTime = a.timestamp ? new Date(a.timestamp).getTime() : 0;
-    const bTime = b.timestamp ? new Date(b.timestamp).getTime() : 0;
-    return bTime - aTime;
-  });
+  const seen = new Set<string>();
+
+  return [...(profile.media ?? []), ...(profile.stories ?? [])]
+    .filter((item) => {
+      if (!item.id) return true;
+      if (seen.has(item.id)) return false;
+      seen.add(item.id);
+      return true;
+    })
+    .sort((a, b) => {
+      const aTime = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+      const bTime = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+      return bTime - aTime;
+    });
 }
 
 function sumProfileInsights(

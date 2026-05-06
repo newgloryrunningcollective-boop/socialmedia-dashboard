@@ -242,8 +242,8 @@ function inferSourceType(
   const ownerId = normalizeOwnerId(media.owner);
   const ownerUsername = normalizeOwnerUsername(media.owner) ?? media.username ?? null;
   const currentUsername = profile.username?.toLowerCase() ?? null;
+  const hasCollaborators = Boolean(media.collaborators?.length);
 
-  if (ownerId && ownerId !== profile.instagramUserId) return "collaborator";
   if (
     ownerUsername &&
     currentUsername &&
@@ -251,8 +251,17 @@ function inferSourceType(
   ) {
     return "collaborator";
   }
+  if (
+    ownerUsername &&
+    currentUsername &&
+    ownerUsername.toLowerCase() === currentUsername
+  ) {
+    return hasCollaborators ? "owned_with_collaborators" : fallback === "tagged" ? "owned" : fallback;
+  }
+  if (ownerId && ownerId !== profile.instagramUserId && fallback !== "owned") {
+    return "collaborator";
+  }
 
-  const hasCollaborators = Boolean(media.collaborators?.length);
   return hasCollaborators ? "owned_with_collaborators" : fallback;
 }
 
@@ -701,12 +710,6 @@ export async function GET() {
       ).length;
       const contentMessages = [
         ownedMediaResult.ok ? null : ownedMediaResult.message,
-        taggedMediaResult.ok
-          ? null
-          : "Contributor/tagged media was not returned by the current Instagram token.",
-        storyResult.ok
-          ? null
-          : "Stories were not returned by the current Instagram token.",
       ].filter(Boolean);
 
       return {
