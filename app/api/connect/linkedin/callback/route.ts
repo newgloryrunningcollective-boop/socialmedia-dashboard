@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
+const SIXTY_DAYS = 60 * 60 * 24 * 60;
+
 type LinkedInIdentity = {
   personalProfile: {
     sub: string | null;
@@ -108,7 +110,7 @@ export async function GET(req: NextRequest) {
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
     path: "/",
-    maxAge: 60 * 60,
+    maxAge: SIXTY_DAYS,
   });
 
   response.cookies.set("linkedin_oauth_state", "", {
