@@ -58,6 +58,34 @@ type MetaMetricsResponse = {
 };
 
 type InstagramProfileGroup = "personal" | "newglory";
+type InstagramContentSource = "owned" | "owned_with_collaborators" | "collaborator" | "tagged" | "story";
+
+type InstagramContentSummary = {
+  rangeStart: string | null;
+  rangeEnd: string | null;
+  contentShared: number | null;
+  feedMedia: number;
+  taggedMedia: number;
+  collaboratorMedia: number;
+  activeStories: number;
+};
+
+type InstagramProfileInsights = {
+  rangeStart: string;
+  rangeEnd: string;
+  views: number | null;
+  reach: number | null;
+  interactions: number | null;
+  accountsEngaged: number | null;
+  profileViews: number | null;
+  follows: number | null;
+};
+
+type InstagramCollaboratorMetric = {
+  id: string | null;
+  username: string | null;
+  status: string | null;
+};
 
 type InstagramProfileMetric = {
   ok?: boolean;
@@ -73,19 +101,38 @@ type InstagramProfileMetric = {
   mediaCount: number | null;
   connectedAt: number;
   media?: InstagramMediaMetric[];
+  stories?: InstagramMediaMetric[];
+  contentSummary?: InstagramContentSummary;
+  insights?: InstagramProfileInsights | null;
   mediaMessage?: string | null;
+  insightsMessage?: string | null;
 };
 
 type InstagramMediaMetric = {
   id: string;
   caption: string | null;
   mediaType: string | null;
+  mediaProductType: string | null;
   mediaUrl: string | null;
   permalink: string | null;
   thumbnailUrl: string | null;
   timestamp: string | null;
+  username: string | null;
+  ownerId: string | null;
+  ownerUsername: string | null;
+  sourceType: InstagramContentSource;
+  isSharedToFeed: boolean | null;
   likeCount: number | null;
   commentsCount: number | null;
+  viewCount: number | null;
+  insightViews: number | null;
+  insightReach: number | null;
+  insightInteractions: number | null;
+  insightShares: number | null;
+  insightSaves: number | null;
+  insightPlays: number | null;
+  insightImpressions: number | null;
+  collaborators: InstagramCollaboratorMetric[];
 };
 
 type InstagramMetricsResponse = {
@@ -248,6 +295,11 @@ function formatDate(value: string | null | undefined) {
   }).format(new Date(value));
 }
 
+function formatRange(start: string | null | undefined, end: string | null | undefined) {
+  if (!start || !end) return "Last 30 full days";
+  return `${formatDate(start)} - ${formatDate(end)}`;
+}
+
 function normalizeHandle(value: string | null | undefined) {
   return value?.replace(/^@/, "").toLowerCase() ?? "";
 }
@@ -275,7 +327,67 @@ function getInitials(value: string) {
 }
 
 function getPostEngagement(media: InstagramMediaMetric) {
-  return (media.likeCount ?? 0) + (media.commentsCount ?? 0);
+  return (
+    media.insightInteractions ??
+    (media.likeCount ?? 0) +
+      (media.commentsCount ?? 0) +
+      (media.insightShares ?? 0) +
+      (media.insightSaves ?? 0)
+  );
+}
+
+function getPostViews(media: InstagramMediaMetric) {
+  return (
+    media.insightViews ??
+    media.viewCount ??
+    media.insightPlays ??
+    media.insightImpressions ??
+    null
+  );
+}
+
+function getContentSourceLabel(sourceType: InstagramContentSource) {
+  if (sourceType === "collaborator" || sourceType === "tagged") return "Contributor";
+  if (sourceType === "owned_with_collaborators") return "Owned + collaborators";
+  if (sourceType === "story") return "Story";
+  return "Owned";
+}
+
+function getContentSourceClasses(sourceType: InstagramContentSource) {
+  if (sourceType === "collaborator" || sourceType === "tagged") {
+    return "border-amber-300/30 bg-amber-400/10 text-amber-100";
+  }
+
+  if (sourceType === "story") {
+    return "border-cyan-300/30 bg-cyan-400/10 text-cyan-100";
+  }
+
+  return "border-white/10 bg-white/10 text-slate-200";
+}
+
+function getProfileContent(profile: InstagramProfileMetric) {
+  return [...(profile.media ?? []), ...(profile.stories ?? [])].sort((a, b) => {
+    const aTime = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+    const bTime = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+    return bTime - aTime;
+  });
+}
+
+function sumProfileInsights(
+  profiles: InstagramProfileMetric[],
+  field: keyof Pick<
+    InstagramProfileInsights,
+    "views" | "reach" | "interactions" | "accountsEngaged" | "profileViews" | "follows"
+  >
+) {
+  return profiles.reduce((sum, profile) => sum + (profile.insights?.[field] ?? 0), 0);
+}
+
+function sumProfileContent(profiles: InstagramProfileMetric[]) {
+  return profiles.reduce(
+    (sum, profile) => sum + (profile.contentSummary?.contentShared ?? 0),
+    0
+  );
 }
 
 async function fetchJson<T>(path: string): Promise<T> {
@@ -457,7 +569,7 @@ function HomeTab({
   );
   const recentInstagramPosts = instagramProfiles
     .flatMap((profile) =>
-      (profile.media ?? []).map((media) => ({
+      getProfileContent(profile).map((media) => ({
         ...media,
         profile,
       }))
@@ -754,10 +866,14 @@ function LiveAccountsPanel({
             ["Followers", formatStat(personalInstagram?.followersCount)],
             ["Following", formatStat(personalInstagram?.followsCount)],
             ["Media", formatStat(personalInstagram?.mediaCount)],
+            ["Views", formatStat(personalInstagram?.insights?.views)],
+            ["Interactions", formatStat(personalInstagram?.insights?.interactions)],
+            ["Shared", formatStat(personalInstagram?.contentSummary?.contentShared)],
             ["Type", personalInstagram?.accountType ?? "Business account required"],
           ]}
-          posts={personalInstagram?.media}
+          posts={personalInstagram ? getProfileContent(personalInstagram) : undefined}
           postsMessage={personalInstagram?.mediaMessage}
+          insightsMessage={personalInstagram?.insightsMessage}
         />
 
         <AccountStatCard
@@ -797,10 +913,14 @@ function LiveAccountsPanel({
               "Media",
               formatStat(newGloryInstagram?.mediaCount ?? newGloryMeta?.igMediaCount),
             ],
+            ["Views", formatStat(newGloryInstagram?.insights?.views)],
+            ["Interactions", formatStat(newGloryInstagram?.insights?.interactions)],
+            ["Shared", formatStat(newGloryInstagram?.contentSummary?.contentShared)],
             ["Type", newGloryInstagram?.accountType ?? "Business account required"],
           ]}
-          posts={newGloryInstagram?.media}
+          posts={newGloryInstagram ? getProfileContent(newGloryInstagram) : undefined}
           postsMessage={newGloryInstagram?.mediaMessage}
+          insightsMessage={newGloryInstagram?.insightsMessage}
         />
 
         <AccountStatCard
@@ -884,24 +1004,47 @@ function InstagramPostPreview({
   compact?: boolean;
 }) {
   const previewUrl = getMediaPreviewUrl(media);
+  const sourceLabel = getContentSourceLabel(media.sourceType);
+  const ownerLabel =
+    media.sourceType === "collaborator" || media.sourceType === "tagged"
+      ? media.ownerUsername
+        ? `Main poster: @${media.ownerUsername}`
+        : "Main poster differs"
+      : null;
   const content = (
     <div className="overflow-hidden rounded-md border border-white/10 bg-white/5">
-      <div
-        className={compact ? "aspect-square bg-black/30 bg-cover bg-center" : "aspect-video bg-black/30 bg-cover bg-center"}
-        style={previewUrl ? { backgroundImage: `url(${previewUrl})` } : undefined}
-      >
-        {!previewUrl && (
-          <div className="flex h-full items-center justify-center px-3 text-center text-xs text-slate-400">
-            No preview
-          </div>
-        )}
+      <div className="relative">
+        <div
+          className={compact ? "aspect-square bg-black/30 bg-cover bg-center" : "aspect-video bg-black/30 bg-cover bg-center"}
+          style={previewUrl ? { backgroundImage: `url(${previewUrl})` } : undefined}
+        >
+          {!previewUrl && (
+            <div className="flex h-full items-center justify-center px-3 text-center text-xs text-slate-400">
+              No preview
+            </div>
+          )}
+        </div>
+        <span className={`absolute left-2 top-2 rounded-full border px-2 py-1 text-[10px] font-medium ${getContentSourceClasses(media.sourceType)}`}>
+          {sourceLabel}
+        </span>
       </div>
       <div className="space-y-1 p-2 text-xs">
         <p className="line-clamp-2 text-slate-200">{media.caption ?? media.mediaType ?? "Instagram post"}</p>
         <p className="text-slate-400">{formatDate(media.timestamp)}</p>
+        {ownerLabel && <p className="text-amber-100">{ownerLabel}</p>}
+        {media.collaborators.length > 0 && (
+          <p className="line-clamp-1 text-slate-400">
+            Collaborators: {media.collaborators.map((item) => item.username ? `@${item.username}` : item.id).join(", ")}
+          </p>
+        )}
         <p className="text-slate-300">
-          {formatCompactStat(media.likeCount)} likes · {formatCompactStat(media.commentsCount)} comments
+          {formatCompactStat(getPostViews(media))} views · {formatCompactStat(getPostEngagement(media))} interactions
         </p>
+        {!compact && (
+          <p className="text-slate-400">
+            {formatCompactStat(media.likeCount)} likes · {formatCompactStat(media.commentsCount)} comments · {formatCompactStat(media.insightShares)} shares
+          </p>
+        )}
       </div>
     </div>
   );
@@ -967,6 +1110,7 @@ function AccountStatCard({
   avatarUrl,
   posts,
   postsMessage,
+  insightsMessage,
 }: {
   group: string;
   platform: string;
@@ -979,6 +1123,7 @@ function AccountStatCard({
   avatarUrl?: string | null;
   posts?: InstagramMediaMetric[];
   postsMessage?: string | null;
+  insightsMessage?: string | null;
 }) {
   return (
     <article className="rounded-lg border border-white/10 bg-black/20 p-4">
@@ -1017,7 +1162,7 @@ function AccountStatCard({
 
       {posts && posts.length > 0 && (
         <div className="mt-4">
-          <p className="mb-2 text-xs uppercase text-slate-400">Latest posts</p>
+          <p className="mb-2 text-xs uppercase text-slate-400">Latest content</p>
           <div className="grid gap-2 sm:grid-cols-3">
             {posts.slice(0, 3).map((post) => (
               <InstagramPostPreview key={post.id} media={post} compact />
@@ -1029,6 +1174,10 @@ function AccountStatCard({
       {postsMessage && (
         <p className="mt-3 text-xs text-amber-200">{postsMessage}</p>
       )}
+
+      {insightsMessage && (
+        <p className="mt-2 text-xs text-amber-200">{insightsMessage}</p>
+      )}
     </article>
   );
 }
@@ -1039,7 +1188,7 @@ function StatisticsTab() {
   const instagramProfiles = liveMetrics.instagram?.profiles ?? [];
   const posts = instagramProfiles
     .flatMap((profile) =>
-      (profile.media ?? []).map((media) => ({
+      getProfileContent(profile).map((media) => ({
         ...media,
         profile,
       }))
@@ -1049,27 +1198,48 @@ function StatisticsTab() {
       const bTime = b.timestamp ? new Date(b.timestamp).getTime() : 0;
       return bTime - aTime;
     });
+  const contributorPosts = posts.filter(
+    (post) => post.sourceType === "collaborator" || post.sourceType === "tagged"
+  );
   const chartData = instagramProfiles.map((profile) => ({
     name: getProfileLabel(profile),
     Followers: profile.followersCount ?? 0,
-    Following: profile.followsCount ?? 0,
-    Media: profile.mediaCount ?? 0,
+    Views: profile.insights?.views ?? 0,
+    Interactions: profile.insights?.interactions ?? 0,
+    Shared: profile.contentSummary?.contentShared ?? 0,
   }));
   const totalFollowers = instagramProfiles.reduce(
     (sum, profile) => sum + (profile.followersCount ?? 0),
     0
   );
-  const totalFollowing = instagramProfiles.reduce(
-    (sum, profile) => sum + (profile.followsCount ?? 0),
+  const insightViews = sumProfileInsights(instagramProfiles, "views");
+  const postViews = posts.reduce(
+    (sum, post) => sum + (getPostViews(post) ?? 0),
     0
   );
-  const totalMedia = instagramProfiles.reduce(
-    (sum, profile) => sum + (profile.mediaCount ?? 0),
-    0
-  );
-  const totalEngagement = posts.reduce(
+  const insightInteractions = sumProfileInsights(instagramProfiles, "interactions");
+  const postInteractions = posts.reduce(
     (sum, post) => sum + getPostEngagement(post),
     0
+  );
+  const totalViews = insightViews || postViews;
+  const totalInteractions = insightInteractions || postInteractions;
+  const totalNewFollowers = sumProfileInsights(instagramProfiles, "follows");
+  const totalSharedContent = sumProfileContent(instagramProfiles) || posts.length;
+  const totalStories = instagramProfiles.reduce(
+    (sum, profile) => sum + (profile.contentSummary?.activeStories ?? 0),
+    0
+  );
+  const totalContributorContent =
+    instagramProfiles.reduce(
+      (sum, profile) => sum + (profile.contentSummary?.collaboratorMedia ?? 0),
+      0
+    ) || contributorPosts.length;
+  const rangeLabel = formatRange(
+    instagramProfiles[0]?.insights?.rangeStart ??
+      instagramProfiles[0]?.contentSummary?.rangeStart,
+    instagramProfiles[0]?.insights?.rangeEnd ??
+      instagramProfiles[0]?.contentSummary?.rangeEnd
   );
 
   return (
@@ -1088,16 +1258,18 @@ function StatisticsTab() {
         <p className="text-sm text-slate-300">
           {liveMetrics.loading
             ? "Loading live Instagram statistics..."
-            : `${range} view · live Instagram snapshot`}
+            : `${range} view · ${rangeLabel} · live Instagram snapshot`}
         </p>
       </PremiumCard>
 
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-3 xl:grid-cols-6">
         {[
           ["Followers", formatStat(totalFollowers)],
-          ["Following", formatStat(totalFollowing)],
-          ["Media", formatStat(totalMedia)],
-          ["Post engagement", formatStat(totalEngagement)],
+          ["Views", formatStat(totalViews)],
+          ["Interactions", formatStat(totalInteractions)],
+          ["New followers", formatStat(totalNewFollowers)],
+          ["Shared content", formatStat(totalSharedContent)],
+          ["Stories + contributor", `${formatStat(totalStories)} / ${formatStat(totalContributorContent)}`],
         ].map(([label, value]) => (
           <PremiumCard key={label}>
             <p className="text-sm text-slate-300">{label}</p>
@@ -1133,8 +1305,9 @@ function StatisticsTab() {
                   />
                   <Legend />
                   <Bar dataKey="Followers" fill="#818cf8" radius={[6, 6, 0, 0]} />
-                  <Bar dataKey="Following" fill="#22d3ee" radius={[6, 6, 0, 0]} />
-                  <Bar dataKey="Media" fill="#f472b6" radius={[6, 6, 0, 0]} />
+                  <Bar dataKey="Views" fill="#22d3ee" radius={[6, 6, 0, 0]} />
+                  <Bar dataKey="Interactions" fill="#f472b6" radius={[6, 6, 0, 0]} />
+                  <Bar dataKey="Shared" fill="#34d399" radius={[6, 6, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -1161,7 +1334,7 @@ function StatisticsTab() {
                       <p className="font-medium">{getProfileDisplayName(profile, "Instagram account")}</p>
                     </div>
                   </div>
-                  <dl className="mt-3 grid grid-cols-3 gap-2 text-sm">
+                  <dl className="mt-3 grid grid-cols-2 gap-2 text-sm">
                     <div className="rounded-md bg-white/5 p-2">
                       <dt className="text-xs text-slate-400">Followers</dt>
                       <dd>{formatCompactStat(profile.followersCount)}</dd>
@@ -1174,7 +1347,34 @@ function StatisticsTab() {
                       <dt className="text-xs text-slate-400">Media</dt>
                       <dd>{formatCompactStat(profile.mediaCount)}</dd>
                     </div>
+                    <div className="rounded-md bg-white/5 p-2">
+                      <dt className="text-xs text-slate-400">Views</dt>
+                      <dd>{formatCompactStat(profile.insights?.views)}</dd>
+                    </div>
+                    <div className="rounded-md bg-white/5 p-2">
+                      <dt className="text-xs text-slate-400">Interactions</dt>
+                      <dd>{formatCompactStat(profile.insights?.interactions)}</dd>
+                    </div>
+                    <div className="rounded-md bg-white/5 p-2">
+                      <dt className="text-xs text-slate-400">New followers</dt>
+                      <dd>{formatCompactStat(profile.insights?.follows)}</dd>
+                    </div>
+                    <div className="rounded-md bg-white/5 p-2">
+                      <dt className="text-xs text-slate-400">Shared</dt>
+                      <dd>{formatCompactStat(profile.contentSummary?.contentShared)}</dd>
+                    </div>
+                    <div className="rounded-md bg-white/5 p-2">
+                      <dt className="text-xs text-slate-400">Stories</dt>
+                      <dd>{formatCompactStat(profile.contentSummary?.activeStories)}</dd>
+                    </div>
+                    <div className="rounded-md bg-white/5 p-2">
+                      <dt className="text-xs text-slate-400">Contributor</dt>
+                      <dd>{formatCompactStat(profile.contentSummary?.collaboratorMedia)}</dd>
+                    </div>
                   </dl>
+                  {profile.insightsMessage && (
+                    <p className="mt-3 text-xs text-amber-200">{profile.insightsMessage}</p>
+                  )}
                 </div>
               ))
             ) : (
@@ -1207,18 +1407,22 @@ function StatisticsTab() {
                   </div>
                 </div>
                 <InstagramPostPreview media={post} />
-                <dl className="mt-3 grid grid-cols-3 gap-2 text-sm">
+                <dl className="mt-3 grid grid-cols-2 gap-2 text-sm">
                   <div className="rounded-md bg-white/5 p-2">
-                    <dt className="text-xs text-slate-400">Likes</dt>
-                    <dd>{formatCompactStat(post.likeCount)}</dd>
+                    <dt className="text-xs text-slate-400">Views</dt>
+                    <dd>{formatCompactStat(getPostViews(post))}</dd>
                   </div>
                   <div className="rounded-md bg-white/5 p-2">
-                    <dt className="text-xs text-slate-400">Comments</dt>
-                    <dd>{formatCompactStat(post.commentsCount)}</dd>
-                  </div>
-                  <div className="rounded-md bg-white/5 p-2">
-                    <dt className="text-xs text-slate-400">Engagement</dt>
+                    <dt className="text-xs text-slate-400">Interactions</dt>
                     <dd>{formatCompactStat(getPostEngagement(post))}</dd>
+                  </div>
+                  <div className="rounded-md bg-white/5 p-2">
+                    <dt className="text-xs text-slate-400">Reach</dt>
+                    <dd>{formatCompactStat(post.insightReach)}</dd>
+                  </div>
+                  <div className="rounded-md bg-white/5 p-2">
+                    <dt className="text-xs text-slate-400">Saves + shares</dt>
+                    <dd>{formatCompactStat((post.insightSaves ?? 0) + (post.insightShares ?? 0))}</dd>
                   </div>
                 </dl>
               </div>
@@ -1227,6 +1431,39 @@ function StatisticsTab() {
         ) : (
           <p className="text-sm text-slate-300">
             Recent Instagram posts will appear here after the connected account token can read media.
+          </p>
+        )}
+      </PremiumCard>
+
+      <PremiumCard>
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 className="text-lg font-medium">Contributor Content</h2>
+          <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-slate-300">
+            {contributorPosts.length} items
+          </span>
+        </div>
+
+        {contributorPosts.length ? (
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {contributorPosts.map((post) => (
+              <div key={`contributor-${post.profile.profileGroup}-${post.id}`} className="rounded-lg border border-amber-300/20 bg-amber-400/10 p-3">
+                <div className="mb-3 flex items-center gap-2">
+                  <ProfileAvatar
+                    imageUrl={post.profile.profilePictureUrl}
+                    label={post.profile.username ?? getProfileLabel(post.profile)}
+                  />
+                  <div>
+                    <p className="text-xs text-amber-100">Contributor on {getProfileLabel(post.profile)}</p>
+                    <p className="text-sm font-medium">{getProfileDisplayName(post.profile, "Instagram account")}</p>
+                  </div>
+                </div>
+                <InstagramPostPreview media={post} />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-slate-300">
+            Contributor posts will appear here when Instagram returns tagged or collaborator media for the connected account.
           </p>
         )}
       </PremiumCard>

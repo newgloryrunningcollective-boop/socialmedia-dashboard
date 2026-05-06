@@ -3,7 +3,8 @@ import { NextRequest, NextResponse } from "next/server";
 const INSTAGRAM_OAUTH_STATE_COOKIE = "instagram_oauth_state";
 const INSTAGRAM_OAUTH_PROFILE_COOKIE = "instagram_oauth_profile";
 const TEN_MINUTES = 60 * 10;
-const DEFAULT_INSTAGRAM_SCOPES = "instagram_business_basic";
+const DEFAULT_INSTAGRAM_SCOPES =
+  "instagram_business_basic,instagram_business_manage_insights";
 const profileGroups = ["personal", "newglory"] as const;
 
 type InstagramProfileGroup = (typeof profileGroups)[number];
