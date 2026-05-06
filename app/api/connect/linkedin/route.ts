@@ -1,24 +1,31 @@
 import { randomUUID } from "crypto";
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
-const DEFAULT_LINKEDIN_SCOPES = [
+const PERSONAL_LINKEDIN_SCOPES = [
   "openid",
   "profile",
   "email",
-  "w_member_social",
+];
+const ORGANIZATION_LINKEDIN_SCOPES = [
+  ...PERSONAL_LINKEDIN_SCOPES,
   "rw_organization_admin",
-  "r_liteprofile",
-  "r_member_profileAnalytics",
-  "r_1st_connections_size",
 ];
 
-function getLinkedInScopes() {
-  return process.env.LINKEDIN_SCOPES?.trim() || DEFAULT_LINKEDIN_SCOPES.join(" ");
+function getLinkedInScopes(mode: string | null) {
+  if (mode === "organization") {
+    return (
+      process.env.LINKEDIN_ORGANIZATION_SCOPES?.trim() ||
+      ORGANIZATION_LINKEDIN_SCOPES.join(" ")
+    );
+  }
+
+  return process.env.LINKEDIN_PERSONAL_SCOPES?.trim() || PERSONAL_LINKEDIN_SCOPES.join(" ");
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const clientId = process.env.LINKEDIN_CLIENT_ID;
   const redirectUri = process.env.LINKEDIN_REDIRECT_URI;
+  const mode = req.nextUrl.searchParams.get("mode");
 
   if (!clientId || !redirectUri) {
     return NextResponse.json(
@@ -33,7 +40,7 @@ export async function GET() {
     client_id: clientId,
     redirect_uri: redirectUri,
     state,
-    scope: getLinkedInScopes(),
+    scope: getLinkedInScopes(mode),
   });
 
   const response = NextResponse.redirect(

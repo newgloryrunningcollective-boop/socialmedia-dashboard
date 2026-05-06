@@ -1178,6 +1178,8 @@ function LiveAccountsPanel({
           account={linkedInOrganization?.name ?? "New Glory Running Collective"}
           status={linkedInOrganization ? "Connected" : "Connect LinkedIn admin"}
           href={connectedProfiles.newGlory.linkedin}
+          actionHref={linkedInOrganization ? undefined : "/api/connect/linkedin?mode=organization"}
+          actionLabel="Connect LinkedIn admin"
           stats={[
             ["Organization ID", linkedInOrganization?.id ?? "n/a"],
             ["Followers", formatStat(linkedInOrganization?.followersCount)],
