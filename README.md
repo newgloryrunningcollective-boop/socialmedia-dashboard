@@ -38,7 +38,8 @@ TikTok Web Login accepteert alleen HTTPS redirect URIs. Gebruik daarom de Vercel
 - LinkedIn identity endpoint leest de tijdelijke identity cookie via `/api/linkedin/metrics`.
 - TikTok OAuth start via `/api/connect/tiktok`.
 - TikTok callback bewaart tijdelijk access/refresh token data in een httpOnly cookie.
-- TikTok metrics endpoint haalt profielinformatie en recente video's op via `/api/tiktok/metrics`.
+- TikTok metrics endpoint haalt profielinformatie op via `/api/tiktok/metrics`.
+- TikTok video metadata wordt pas opgehaald als `video.list` is goedgekeurd en in `TIKTOK_SCOPES` staat.
 
 ## Vercel
 
@@ -55,4 +56,5 @@ Zet dezelfde env vars uit `.env.example` ook in Vercel voor Production en Previe
 - Vervang tijdelijke cookie-opslag door database-opslag met versleutelde tokens.
 - Voeg token refresh/expiry handling toe per platform.
 - Koppel dashboard-KPI's aan `/api/meta/metrics`, `/api/linkedin/metrics` en `/api/tiktok/metrics`.
+- Zet `TIKTOK_SCOPES=user.info.basic,video.list` zodra TikTok `video.list` beschikbaar maakt voor de app.
 - Bouw YouTube/X routes pas nadat de basisopslag voor tokens staat.

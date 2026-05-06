@@ -69,6 +69,13 @@ type TikTokTokenEnvelopeResponse = TikTokTokenResponse & {
 
 const ONE_YEAR = 60 * 60 * 24 * 365;
 
+function hasTikTokScope(scope: string, requiredScope: string) {
+  return scope
+    .split(",")
+    .map((item) => item.trim())
+    .includes(requiredScope);
+}
+
 function getTikTokClientKey() {
   return process.env.TIKTOK_CLIENT_KEY ?? process.env.TIKTOK_CLIENT_ID;
 }
@@ -231,19 +238,23 @@ export async function GET() {
     auth = refreshResult.auth;
   }
 
+  const canReadVideos = hasTikTokScope(auth.scope, "video.list");
   const [profile, videos] = await Promise.all([
     fetchTikTokUserInfo(auth.accessToken),
-    fetchTikTokVideos(auth.accessToken),
+    canReadVideos ? fetchTikTokVideos(auth.accessToken) : Promise.resolve(null),
   ]);
 
   const response = NextResponse.json({
-    ok: profile.ok && videos.ok,
+    ok: profile.ok && (videos?.ok ?? true),
     source: "cookie",
     openId: auth.openId,
     scope: auth.scope,
     accessTokenExpiresAt: auth.accessTokenExpiresAt,
     profile: profile.data,
-    videos: videos.data,
+    videos: videos?.data ?? null,
+    videosMessage: canReadVideos
+      ? null
+      : "TikTok video.list scope is not connected for this account.",
   });
 
   response.cookies.set(TIKTOK_AUTH_COOKIE, JSON.stringify(auth), {
