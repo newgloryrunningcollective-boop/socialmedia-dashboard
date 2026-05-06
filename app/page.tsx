@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useMemo, useState, type ReactNode } from "react";
+import { use, useEffect, useMemo, useState, type ReactNode } from "react";
 import { motion } from "framer-motion";
 
 type Tab = "Home" | "Statistics" | "Planning";
@@ -30,6 +30,63 @@ type ConnectedPage = {
   fan_count: number | null;
 };
 
+type MetaMetric = {
+  pageId: string;
+  pageName: string;
+  fbFanCount: number | null;
+  fbFollowersCount: number | null;
+  igBusinessId: string | null;
+  igUsername: string | null;
+  igFollowersCount: number | null;
+  igMediaCount: number | null;
+};
+
+type MetaMetricsResponse = {
+  ok: boolean;
+  message?: string;
+  metrics?: MetaMetric[];
+};
+
+type LinkedInMetricsResponse = {
+  ok: boolean;
+  message?: string;
+  identity?: {
+    personalProfile: {
+      sub: string | null;
+      name: string | null;
+      email: string | null;
+    };
+    organizations: Array<{ id: string; name: string }>;
+  };
+};
+
+type TikTokMetricsResponse = {
+  ok: boolean;
+  message?: string;
+  scope?: string;
+  profile?: {
+    data?: {
+      user?: {
+        open_id?: string;
+        union_id?: string;
+        avatar_url?: string;
+        display_name?: string;
+      };
+    };
+  };
+  videos?: {
+    videos?: Array<{ id?: string }>;
+  } | null;
+  videosMessage?: string | null;
+};
+
+type LiveMetricsState = {
+  meta: MetaMetricsResponse | null;
+  linkedin: LinkedInMetricsResponse | null;
+  tiktok: TikTokMetricsResponse | null;
+  loading: boolean;
+};
+
 type DashboardSearchParams = Promise<Record<string, string | string[] | undefined>>;
 
 type ConnectionSummary = {
@@ -48,11 +105,20 @@ const connectedProfiles = {
   personal: {
     instagram: "@thijs.wijma",
     linkedin: "https://www.linkedin.com/in/thijs-w-74b309192",
+    tiktok: "Personal TikTok",
   },
   newGlory: {
     instagram: "@new_glory_runningcollective",
+    facebook: "https://www.facebook.com/people/New-Glory-Running-Collective/61572088179385/",
     linkedin: "https://www.linkedin.com/company/new-glory-running-collective/",
   },
+};
+
+const initialLiveMetrics: LiveMetricsState = {
+  meta: null,
+  linkedin: null,
+  tiktok: null,
+  loading: true,
 };
 
 function firstParam(value: string | string[] | undefined) {
@@ -102,6 +168,76 @@ function parseConnectionSummary(params: Record<string, string | string[] | undef
     tikTokError:
       tikTokStatus === "0" ? firstParam(params.tiktok_error) ?? "TikTok connection failed." : null,
   };
+}
+
+function formatStat(value: number | null | undefined) {
+  return typeof value === "number" ? new Intl.NumberFormat("en").format(value) : "n/a";
+}
+
+function normalizeHandle(value: string | null | undefined) {
+  return value?.replace(/^@/, "").toLowerCase() ?? "";
+}
+
+async function fetchJson<T>(path: string): Promise<T> {
+  const res = await fetch(path, { cache: "no-store" });
+  const json = (await res.json()) as T;
+  return json;
+}
+
+function useLiveMetrics(): LiveMetricsState {
+  const [metrics, setMetrics] = useState<LiveMetricsState>(initialLiveMetrics);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadMetrics() {
+      const [meta, linkedin, tiktok] = await Promise.all([
+        fetchJson<MetaMetricsResponse>("/api/meta/metrics").catch((error: Error) => ({
+          ok: false,
+          message: error.message,
+        })),
+        fetchJson<LinkedInMetricsResponse>("/api/linkedin/metrics").catch((error: Error) => ({
+          ok: false,
+          message: error.message,
+        })),
+        fetchJson<TikTokMetricsResponse>("/api/tiktok/metrics").catch((error: Error) => ({
+          ok: false,
+          message: error.message,
+        })),
+      ]);
+
+      if (!cancelled) {
+        setMetrics({ meta, linkedin, tiktok, loading: false });
+      }
+    }
+
+    void loadMetrics();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return metrics;
+}
+
+function findNewGloryMeta(metrics: MetaMetric[] | undefined) {
+  return metrics?.find((item) => {
+    const pageName = item.pageName.toLowerCase();
+    const igUsername = normalizeHandle(item.igUsername);
+    return (
+      pageName.includes("new glory") ||
+      igUsername === normalizeHandle(connectedProfiles.newGlory.instagram)
+    );
+  });
+}
+
+function findLinkedInOrganization(
+  organizations: Array<{ id: string; name: string }> | undefined
+) {
+  return organizations?.find((organization) =>
+    organization.name.toLowerCase().includes("new glory")
+  );
 }
 
 const initialTasks: Task[] = [
@@ -178,6 +314,20 @@ function HomeTab({
 }) {
   const [tasks, setTasks] = useState(initialTasks);
   const [newTask, setNewTask] = useState("");
+  const liveMetrics = useLiveMetrics();
+  const newGloryMeta = findNewGloryMeta(liveMetrics.meta?.metrics);
+  const linkedInOrganization = findLinkedInOrganization(
+    liveMetrics.linkedin?.identity?.organizations
+  );
+  const tikTokUser = liveMetrics.tiktok?.profile?.data?.user;
+  const totalKnownFollowers =
+    (newGloryMeta?.igFollowersCount ?? 0) +
+    (newGloryMeta?.fbFollowersCount ?? newGloryMeta?.fbFanCount ?? 0);
+  const connectedPlatformCount = [
+    Boolean(newGloryMeta),
+    Boolean(liveMetrics.linkedin?.identity),
+    Boolean(tikTokUser),
+  ].filter(Boolean).length;
 
   const toggleTask = (id: string) => {
     setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, done: !t.done } : t)));
@@ -193,9 +343,9 @@ function HomeTab({
   };
 
   const kpis = [
-    { label: "Total Followers", value: "Connect accounts" },
-    { label: "Monthly Growth", value: "Connect accounts" },
-    { label: "Engagement Rate", value: "Connect accounts" },
+    { label: "Known Live Followers", value: liveMetrics.loading ? "Loading..." : formatStat(totalKnownFollowers) },
+    { label: "Connected Sources", value: liveMetrics.loading ? "Loading..." : `${connectedPlatformCount}/3` },
+    { label: "Live Data Status", value: liveMetrics.loading ? "Loading..." : "Ready" },
   ];
 
   return (
@@ -274,6 +424,12 @@ function HomeTab({
           </div>
         </div>
       </PremiumCard>
+
+      <LiveAccountsPanel
+        liveMetrics={liveMetrics}
+        newGloryMeta={newGloryMeta}
+        linkedInOrganization={linkedInOrganization}
+      />
 
       <div className="grid gap-4 lg:grid-cols-3">
         <PremiumCard>
@@ -361,6 +517,147 @@ function HomeTab({
         </PremiumCard>
       </div>
     </motion.div>
+  );
+}
+
+function LiveAccountsPanel({
+  liveMetrics,
+  newGloryMeta,
+  linkedInOrganization,
+}: {
+  liveMetrics: LiveMetricsState;
+  newGloryMeta: MetaMetric | undefined;
+  linkedInOrganization: { id: string; name: string } | undefined;
+}) {
+  const linkedInProfile = liveMetrics.linkedin?.identity?.personalProfile;
+  const tikTokUser = liveMetrics.tiktok?.profile?.data?.user;
+
+  return (
+    <PremiumCard>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-medium">Live Linked Accounts</h2>
+          <p className="text-sm text-slate-300">Connected accounts and live stats available from current API permissions.</p>
+        </div>
+        <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-slate-300">
+          {liveMetrics.loading ? "Refreshing..." : "Live check complete"}
+        </span>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        <AccountStatCard
+          group="Personal"
+          platform="Instagram"
+          account={connectedProfiles.personal.instagram}
+          status="Listed"
+          stats={[
+            ["Followers", "Needs Instagram business/creator API access"],
+            ["Media", "Not available from current connection"],
+          ]}
+        />
+
+        <AccountStatCard
+          group="New Glory"
+          platform="Instagram"
+          account={newGloryMeta?.igUsername ? `@${newGloryMeta.igUsername}` : connectedProfiles.newGlory.instagram}
+          status={newGloryMeta?.igBusinessId ? "Live" : "Connect Meta"}
+          stats={[
+            ["Followers", formatStat(newGloryMeta?.igFollowersCount)],
+            ["Media", formatStat(newGloryMeta?.igMediaCount)],
+          ]}
+        />
+
+        <AccountStatCard
+          group="New Glory"
+          platform="Facebook"
+          account={newGloryMeta?.pageName ?? "New Glory Running Collective"}
+          status={newGloryMeta ? "Live" : "Connect Meta"}
+          href={connectedProfiles.newGlory.facebook}
+          stats={[
+            ["Followers", formatStat(newGloryMeta?.fbFollowersCount)],
+            ["Fans", formatStat(newGloryMeta?.fbFanCount)],
+          ]}
+        />
+
+        <AccountStatCard
+          group="Personal"
+          platform="LinkedIn"
+          account={linkedInProfile?.name ?? "Thijs Wijma"}
+          status={linkedInProfile ? "Connected" : "Connect LinkedIn"}
+          href={connectedProfiles.personal.linkedin}
+          stats={[
+            ["Profile ID", linkedInProfile?.sub ?? "n/a"],
+            ["Email", linkedInProfile?.email ?? "n/a"],
+          ]}
+        />
+
+        <AccountStatCard
+          group="New Glory"
+          platform="LinkedIn"
+          account={linkedInOrganization?.name ?? "New Glory Running Collective"}
+          status={linkedInOrganization ? "Connected" : "Connect LinkedIn admin"}
+          href={connectedProfiles.newGlory.linkedin}
+          stats={[
+            ["Organization ID", linkedInOrganization?.id ?? "n/a"],
+            ["Followers", "Requires LinkedIn organization stats permission"],
+          ]}
+        />
+
+        <AccountStatCard
+          group="Personal"
+          platform="TikTok"
+          account={tikTokUser?.display_name ?? connectedProfiles.personal.tiktok}
+          status={tikTokUser ? "Connected" : "Connect TikTok"}
+          stats={[
+            ["Open ID", tikTokUser?.open_id ?? "n/a"],
+            ["Videos", liveMetrics.tiktok?.videos?.videos?.length?.toString() ?? liveMetrics.tiktok?.videosMessage ?? "n/a"],
+          ]}
+        />
+      </div>
+    </PremiumCard>
+  );
+}
+
+function AccountStatCard({
+  group,
+  platform,
+  account,
+  status,
+  stats,
+  href,
+}: {
+  group: string;
+  platform: string;
+  account: string;
+  status: string;
+  stats: Array<[string, string]>;
+  href?: string;
+}) {
+  return (
+    <article className="rounded-lg border border-white/10 bg-black/20 p-4">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs uppercase text-slate-400">{group} · {platform}</p>
+          <h3 className="mt-1 text-base font-medium">{account}</h3>
+        </div>
+        <span className="rounded-full bg-white/10 px-2 py-1 text-xs text-slate-300">{status}</span>
+      </div>
+
+      <dl className="grid gap-2 text-sm sm:grid-cols-2">
+        {stats.map(([label, value]) => (
+          <div key={label} className="rounded-md bg-white/5 p-2">
+            <dt className="text-xs text-slate-400">{label}</dt>
+            <dd className="mt-1 break-words text-slate-100">{value}</dd>
+          </div>
+        ))}
+      </dl>
+
+      {href && (
+        <a href={href} target="_blank" rel="noreferrer" className="mt-3 inline-flex text-sm text-indigo-300 underline">
+          Open profile
+        </a>
+      )}
+    </article>
   );
 }
 
