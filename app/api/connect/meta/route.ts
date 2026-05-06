@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
 
+const META_OAUTH_STATE_COOKIE = "meta_oauth_state";
+const TEN_MINUTES = 60 * 10;
+
 export async function GET() {
   const clientId = process.env.META_APP_ID;
   const redirectUri = process.env.META_REDIRECT_URI;
@@ -17,10 +20,21 @@ export async function GET() {
     client_id: clientId,
     redirect_uri: redirectUri,
     state,
-    scope: "public_profile,pages_show_list,pages_read_engagement",
+    scope: "public_profile,pages_show_list,pages_read_engagement,instagram_basic",
     response_type: "code",
+    auth_type: "rerequest",
   });
 
   const url = `https://www.facebook.com/v20.0/dialog/oauth?${params.toString()}`;
-  return NextResponse.redirect(url);
+  const response = NextResponse.redirect(url);
+
+  response.cookies.set(META_OAUTH_STATE_COOKIE, state, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/",
+    maxAge: TEN_MINUTES,
+  });
+
+  return response;
 }

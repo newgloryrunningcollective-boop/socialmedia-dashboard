@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { use, useMemo, useState, type ReactNode } from "react";
 import { motion } from "framer-motion";
 
 type Tab = "Home" | "Statistics" | "Planning";
@@ -30,8 +30,79 @@ type ConnectedPage = {
   fan_count: number | null;
 };
 
+type DashboardSearchParams = Promise<Record<string, string | string[] | undefined>>;
+
+type ConnectionSummary = {
+  metaConnected: boolean;
+  metaError: string | null;
+  connectedPages: ConnectedPage[];
+  linkedInConnected: boolean;
+  linkedInError: boolean;
+  tikTokConnected: boolean;
+  tikTokError: string | null;
+};
+
 const tabs: Tab[] = ["Home", "Statistics", "Planning"];
 const ranges: Range[] = ["Day", "Week", "Month", "Year"];
+const connectedProfiles = {
+  personal: {
+    instagram: "@thijs.wijma",
+    linkedin: "https://www.linkedin.com/in/thijs-w-74b309192",
+  },
+  newGlory: {
+    instagram: "@new_glory_runningcollective",
+    linkedin: "https://www.linkedin.com/company/new-glory-running-collective/",
+  },
+};
+
+function firstParam(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function isConnectedPage(value: unknown): value is ConnectedPage {
+  if (!value || typeof value !== "object") return false;
+
+  const page = value as Partial<ConnectedPage>;
+  const ig = page.ig as Partial<ConnectedPage["ig"]> | null | undefined;
+
+  return (
+    typeof page.id === "string" &&
+    typeof page.name === "string" &&
+    (page.fan_count === null || typeof page.fan_count === "number") &&
+    (page.ig === null ||
+      (Boolean(ig) &&
+        typeof ig?.id === "string" &&
+        (ig.username === null || typeof ig?.username === "string")))
+  );
+}
+
+function parseConnectedPages(value: string | string[] | undefined) {
+  const raw = firstParam(value);
+  if (!raw) return [];
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed.filter(isConnectedPage) : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseConnectionSummary(params: Record<string, string | string[] | undefined>): ConnectionSummary {
+  const linkedInStatus = firstParam(params.linkedin_connected);
+  const tikTokStatus = firstParam(params.tiktok_connected);
+
+  return {
+    metaConnected: firstParam(params.meta_connected) === "1",
+    metaError: firstParam(params.meta_error) ?? null,
+    connectedPages: parseConnectedPages(params.pages),
+    linkedInConnected: linkedInStatus === "1",
+    linkedInError: linkedInStatus === "0",
+    tikTokConnected: tikTokStatus === "1",
+    tikTokError:
+      tikTokStatus === "0" ? firstParam(params.tiktok_error) ?? "TikTok connection failed." : null,
+  };
+}
 
 const initialTasks: Task[] = [
   { id: "t1", text: "Review weekly content pillars", priority: "High", done: false, source: "Manual" },
@@ -44,32 +115,9 @@ const initialPlan: CalendarItem[] = [
   { id: "p2", title: "Community progress post", platform: "LinkedIn", date: "2026-05-08", time: "08:30", status: "Draft" },
 ];
 
-export default function DashboardPage() {
+export default function DashboardPage({ searchParams }: { searchParams: DashboardSearchParams }) {
+  const connectionSummary = parseConnectionSummary(use(searchParams));
   const [activeTab, setActiveTab] = useState<Tab>("Home");
-  const [metaConnected, setMetaConnected] = useState(false);
-  const [metaError, setMetaError] = useState<string | null>(null);
-  const [connectedPages, setConnectedPages] = useState<ConnectedPage[]>([]);
-
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const connected = params.get("meta_connected") === "1";
-    const error = params.get("meta_error");
-    const pagesParam = params.get("pages");
-
-    setMetaConnected(connected);
-    setMetaError(error);
-
-    if (pagesParam) {
-      try {
-        const parsed = JSON.parse(decodeURIComponent(pagesParam)) as ConnectedPage[];
-        setConnectedPages(parsed);
-      } catch {
-        setConnectedPages([]);
-      }
-    } else {
-      setConnectedPages([]);
-    }
-  }, []);
 
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top_right,#312e81_0%,#0b1020_35%,#070b16_70%)] p-6 text-slate-100">
@@ -94,7 +142,7 @@ export default function DashboardPage() {
         </nav>
 
         {activeTab === "Home" && (
-          <HomeTab metaConnected={metaConnected} metaError={metaError} connectedPages={connectedPages} />
+          <HomeTab {...connectionSummary} />
         )}
         {activeTab === "Statistics" && <StatisticsTab />}
         {activeTab === "Planning" && <PlanningTab />}
@@ -115,10 +163,18 @@ function HomeTab({
   metaConnected,
   metaError,
   connectedPages,
+  linkedInConnected,
+  linkedInError,
+  tikTokConnected,
+  tikTokError,
 }: {
   metaConnected: boolean;
   metaError: string | null;
   connectedPages: ConnectedPage[];
+  linkedInConnected: boolean;
+  linkedInError: boolean;
+  tikTokConnected: boolean;
+  tikTokError: string | null;
 }) {
   const [tasks, setTasks] = useState(initialTasks);
   const [newTask, setNewTask] = useState("");
@@ -189,48 +245,121 @@ function HomeTab({
       </div>
 
       <PremiumCard>
-        <h2 className="mb-3 text-lg font-medium">Connected Meta Accounts</h2>
-
-        {!metaConnected && !metaError && (
-          <div className="space-y-2">
-            <p className="text-sm text-slate-300">No Meta accounts connected yet.</p>
-            <a href="/api/connect/meta" className="inline-flex rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium hover:bg-indigo-400">
-              Connect Meta (Facebook + Instagram)
+        <h2 className="mb-3 text-lg font-medium">Profile Groups</h2>
+        <div className="grid gap-3 text-sm md:grid-cols-2">
+          <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+            <p className="mb-1 font-medium">Personal</p>
+            <p className="text-slate-300">Instagram: {connectedProfiles.personal.instagram}</p>
+            <a
+              href={connectedProfiles.personal.linkedin}
+              target="_blank"
+              rel="noreferrer"
+              className="text-indigo-300 underline"
+            >
+              LinkedIn profile
             </a>
           </div>
-        )}
 
-        {metaError && (
-          <div className="space-y-2">
-            <p className="text-sm text-red-300">❌ Meta connection failed: {metaError}</p>
-            <a href="/api/connect/meta" className="inline-flex rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium hover:bg-indigo-400">
-              Retry Meta Connect
+          <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+            <p className="mb-1 font-medium">New Glory</p>
+            <p className="text-slate-300">Instagram: {connectedProfiles.newGlory.instagram}</p>
+            <a
+              href={connectedProfiles.newGlory.linkedin}
+              target="_blank"
+              rel="noreferrer"
+              className="text-indigo-300 underline"
+            >
+              LinkedIn company page
             </a>
           </div>
-        )}
-
-        {metaConnected && (
-          <div className="space-y-2 text-sm">
-            <p className="text-emerald-300">✅ Meta connected successfully</p>
-            {connectedPages.length === 0 ? (
-              <p className="text-slate-300">No pages returned.</p>
-            ) : (
-              <ul className="space-y-2">
-                {connectedPages.map((p) => (
-                  <li key={p.id} className="rounded-lg border border-white/10 bg-black/20 px-3 py-2">
-                    <p className="font-medium">{p.name}</p>
-                    <p className="text-slate-400">
-                      Page ID: {p.id}
-                      {typeof p.fan_count === "number" ? ` · Followers: ${p.fan_count}` : " · Followers: n/a"}
-                      {p.ig ? ` · IG: @${p.ig.username ?? "unknown"} (${p.ig.id})` : " · IG not linked"}
-                    </p>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
+        </div>
       </PremiumCard>
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        <PremiumCard>
+          <h2 className="mb-3 text-lg font-medium">Connected Meta Accounts</h2>
+
+          {!metaConnected && !metaError && (
+            <div className="space-y-2">
+              <p className="text-sm text-slate-300">No Meta accounts connected yet.</p>
+              <a href="/api/connect/meta" className="inline-flex rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium hover:bg-indigo-400">
+                Connect Meta (Facebook + Instagram)
+              </a>
+            </div>
+          )}
+
+          {metaError && (
+            <div className="space-y-2">
+              <p className="text-sm text-red-300">Meta connection failed: {metaError}</p>
+              <a href="/api/connect/meta" className="inline-flex rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium hover:bg-indigo-400">
+                Retry Meta Connect
+              </a>
+            </div>
+          )}
+
+          {metaConnected && (
+            <div className="space-y-2 text-sm">
+              <p className="text-emerald-300">Meta connected successfully</p>
+              {connectedPages.length === 0 ? (
+                <p className="text-slate-300">No pages returned.</p>
+              ) : (
+                <ul className="space-y-2">
+                  {connectedPages.map((p) => (
+                    <li key={p.id} className="rounded-lg border border-white/10 bg-black/20 px-3 py-2">
+                      <p className="font-medium">{p.name}</p>
+                      <p className="text-slate-400">
+                        Page ID: {p.id}
+                        {typeof p.fan_count === "number" ? ` · Followers: ${p.fan_count}` : " · Followers: n/a"}
+                        {p.ig ? ` · IG: @${p.ig.username ?? "unknown"} (${p.ig.id})` : " · IG not linked"}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </PremiumCard>
+
+        <PremiumCard>
+          <h2 className="mb-3 text-lg font-medium">Connected LinkedIn Accounts</h2>
+          {linkedInConnected ? (
+            <div className="space-y-2 text-sm">
+              <p className="text-emerald-300">LinkedIn connected successfully</p>
+              <a href="/api/linkedin/metrics" className="inline-flex rounded-lg bg-white/10 px-4 py-2 text-sm font-medium hover:bg-white/15">
+                View LinkedIn identity
+              </a>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {linkedInError && <p className="text-sm text-red-300">LinkedIn connection failed.</p>}
+              <p className="text-sm text-slate-300">No LinkedIn account connected yet.</p>
+              <a href="/api/connect/linkedin" className="inline-flex rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium hover:bg-indigo-400">
+                Connect LinkedIn
+              </a>
+            </div>
+          )}
+        </PremiumCard>
+
+        <PremiumCard>
+          <h2 className="mb-3 text-lg font-medium">Connected TikTok Account</h2>
+          {tikTokConnected ? (
+            <div className="space-y-2 text-sm">
+              <p className="text-emerald-300">TikTok connected successfully</p>
+              <a href="/api/tiktok/metrics" className="inline-flex rounded-lg bg-white/10 px-4 py-2 text-sm font-medium hover:bg-white/15">
+                View TikTok metrics
+              </a>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {tikTokError && <p className="text-sm text-red-300">TikTok connection failed: {tikTokError}</p>}
+              <p className="text-sm text-slate-300">No TikTok account connected yet.</p>
+              <a href="/api/connect/tiktok" className="inline-flex rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium hover:bg-indigo-400">
+                Connect TikTok
+              </a>
+            </div>
+          )}
+        </PremiumCard>
+      </div>
     </motion.div>
   );
 }
