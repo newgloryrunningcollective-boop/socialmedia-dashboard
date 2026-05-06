@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 const META_OAUTH_STATE_COOKIE = "meta_oauth_state";
-const ONE_HOUR = 60 * 60;
+const SIXTY_DAYS = 60 * 60 * 24 * 60;
 
 type StoredPage = {
   pageId: string;
@@ -251,7 +251,7 @@ export async function GET(req: NextRequest) {
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
     path: "/",
-    maxAge: ONE_HOUR,
+    maxAge: SIXTY_DAYS,
   });
 
   return response;
