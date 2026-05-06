@@ -5,10 +5,15 @@ const SIXTY_DAYS = 60 * 60 * 24 * 60;
 type LinkedInIdentity = {
   personalProfile: {
     sub: string | null;
+    personId: string | null;
     name: string | null;
     email: string | null;
   };
   organizations: Array<{ id: string; name: string }>;
+};
+
+type LinkedInProfileResponse = {
+  id?: string | number;
 };
 
 type LinkedInOrganizationAclElement = {
@@ -22,6 +27,12 @@ type LinkedInOrganizationAclsResponse = {
   elements?: LinkedInOrganizationAclElement[];
 };
 
+type LinkedInTokenResponse = {
+  access_token?: string;
+  expires_in?: number;
+  scope?: string;
+};
+
 function isLinkedInOrganization(
   value: { id: string; name: string } | null
 ): value is { id: string; name: string } {
@@ -33,6 +44,13 @@ async function fetchLinkedInIdentity(accessToken: string): Promise<LinkedInIdent
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   const meJson = await meResponse.json();
+
+  const profileResponse = await fetch("https://api.linkedin.com/v2/me", {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const profileJson = profileResponse.ok
+    ? ((await profileResponse.json()) as LinkedInProfileResponse)
+    : {};
 
   const orgsRes = await fetch(
     "https://api.linkedin.com/v2/organizationAcls?q=roleAssignee&role=ADMINISTRATOR&projection=(elements*(organizationalTarget~(id,localizedName)))",
@@ -56,6 +74,7 @@ async function fetchLinkedInIdentity(accessToken: string): Promise<LinkedInIdent
   return {
     personalProfile: {
       sub: meJson?.sub ? String(meJson.sub) : null,
+      personId: profileJson?.id ? String(profileJson.id) : null,
       name: meJson?.name ? String(meJson.name) : null,
       email: meJson?.email ? String(meJson.email) : null,
     },
@@ -95,7 +114,7 @@ export async function GET(req: NextRequest) {
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: body.toString(),
   });
-  const tokenJson = await tokenRes.json();
+  const tokenJson = (await tokenRes.json()) as LinkedInTokenResponse;
 
   if (!tokenRes.ok || !tokenJson.access_token) {
     return NextResponse.redirect(`${appBaseUrl}?linkedin_connected=0`);
@@ -103,6 +122,10 @@ export async function GET(req: NextRequest) {
 
   const accessToken = String(tokenJson.access_token);
   const identity = await fetchLinkedInIdentity(accessToken);
+  const expiresIn =
+    typeof tokenJson.expires_in === "number" && tokenJson.expires_in > 0
+      ? tokenJson.expires_in
+      : SIXTY_DAYS;
 
   const response = NextResponse.redirect(`${appBaseUrl}?linkedin_connected=1`);
   response.cookies.set("linkedin_identity", JSON.stringify(identity), {
@@ -112,6 +135,22 @@ export async function GET(req: NextRequest) {
     path: "/",
     maxAge: SIXTY_DAYS,
   });
+
+  response.cookies.set(
+    "linkedin_access",
+    JSON.stringify({
+      accessToken,
+      expiresAt: Date.now() + expiresIn * 1000,
+      scope: tokenJson.scope ?? null,
+    }),
+    {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+      maxAge: Math.min(expiresIn, SIXTY_DAYS),
+    }
+  );
 
   response.cookies.set("linkedin_oauth_state", "", {
     httpOnly: true,
