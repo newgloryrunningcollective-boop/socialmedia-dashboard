@@ -5,9 +5,30 @@ import { motion } from "framer-motion";
 
 type Tab = "Home" | "Statistics" | "Planning";
 type Range = "Day" | "Week" | "Month" | "Year";
-type Task = { id: string; text: string; priority: "High" | "Medium" | "Low"; done: boolean; source: "Manual" | "Auto" };
-type CalendarItem = { id: string; title: string; platform: string; date: string; time: string; status: "Draft" | "Scheduled" | "Posted" };
-type ConnectedPage = { id: string; name: string; ig: string | null };
+
+type Task = {
+  id: string;
+  text: string;
+  priority: "High" | "Medium" | "Low";
+  done: boolean;
+  source: "Manual" | "Auto";
+};
+
+type CalendarItem = {
+  id: string;
+  title: string;
+  platform: string;
+  date: string;
+  time: string;
+  status: "Draft" | "Scheduled" | "Posted";
+};
+
+type ConnectedPage = {
+  id: string;
+  name: string;
+  ig: { id: string; username: string | null } | null;
+  fan_count: number | null;
+};
 
 const tabs: Tab[] = ["Home", "Statistics", "Planning"];
 const ranges: Range[] = ["Day", "Week", "Month", "Year"];
@@ -15,12 +36,12 @@ const ranges: Range[] = ["Day", "Week", "Month", "Year"];
 const initialTasks: Task[] = [
   { id: "t1", text: "Review weekly content pillars", priority: "High", done: false, source: "Manual" },
   { id: "t2", text: "Post running club update at peak hour", priority: "Medium", done: false, source: "Auto" },
-  { id: "t3", text: "Refine CTA on latest carousel", priority: "Low", done: true, source: "Manual" }
+  { id: "t3", text: "Refine CTA on latest carousel", priority: "Low", done: true, source: "Manual" },
 ];
 
 const initialPlan: CalendarItem[] = [
   { id: "p1", title: "Interval training reel", platform: "Instagram", date: "2026-05-07", time: "19:00", status: "Scheduled" },
-  { id: "p2", title: "Community progress post", platform: "LinkedIn", date: "2026-05-08", time: "08:30", status: "Draft" }
+  { id: "p2", title: "Community progress post", platform: "LinkedIn", date: "2026-05-08", time: "08:30", status: "Draft" },
 ];
 
 export default function DashboardPage() {
@@ -40,7 +61,8 @@ export default function DashboardPage() {
 
     if (pagesParam) {
       try {
-        setConnectedPages(JSON.parse(decodeURIComponent(pagesParam)));
+        const parsed = JSON.parse(decodeURIComponent(pagesParam)) as ConnectedPage[];
+        setConnectedPages(parsed);
       } catch {
         setConnectedPages([]);
       }
@@ -71,7 +93,9 @@ export default function DashboardPage() {
           ))}
         </nav>
 
-        {activeTab === "Home" && <HomeTab metaConnected={metaConnected} metaError={metaError} connectedPages={connectedPages} />}
+        {activeTab === "Home" && (
+          <HomeTab metaConnected={metaConnected} metaError={metaError} connectedPages={connectedPages} />
+        )}
         {activeTab === "Statistics" && <StatisticsTab />}
         {activeTab === "Planning" && <PlanningTab />}
       </div>
@@ -80,24 +104,42 @@ export default function DashboardPage() {
 }
 
 function PremiumCard({ children }: { children: ReactNode }) {
-  return <section className="rounded-2xl border border-white/10 bg-white/5 p-5 shadow-[0_12px_48px_rgba(76,29,149,0.25)] backdrop-blur-xl">{children}</section>;
+  return (
+    <section className="rounded-2xl border border-white/10 bg-white/5 p-5 shadow-[0_12px_48px_rgba(76,29,149,0.25)] backdrop-blur-xl">
+      {children}
+    </section>
+  );
 }
 
-function HomeTab({ metaConnected, metaError, connectedPages }: { metaConnected: boolean; metaError: string | null; connectedPages: ConnectedPage[] }) {
+function HomeTab({
+  metaConnected,
+  metaError,
+  connectedPages,
+}: {
+  metaConnected: boolean;
+  metaError: string | null;
+  connectedPages: ConnectedPage[];
+}) {
   const [tasks, setTasks] = useState(initialTasks);
   const [newTask, setNewTask] = useState("");
 
-  const toggleTask = (id: string) => setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, done: !t.done } : t)));
+  const toggleTask = (id: string) => {
+    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, done: !t.done } : t)));
+  };
+
   const addManualTask = () => {
     if (!newTask.trim()) return;
-    setTasks((prev) => [{ id: crypto.randomUUID(), text: newTask.trim(), priority: "Medium", done: false, source: "Manual" }, ...prev]);
+    setTasks((prev) => [
+      { id: crypto.randomUUID(), text: newTask.trim(), priority: "Medium", done: false, source: "Manual" },
+      ...prev,
+    ]);
     setNewTask("");
   };
 
   const kpis = [
     { label: "Total Followers", value: "Connect accounts" },
     { label: "Monthly Growth", value: "Connect accounts" },
-    { label: "Engagement Rate", value: "Connect accounts" }
+    { label: "Engagement Rate", value: "Connect accounts" },
   ];
 
   return (
@@ -115,8 +157,15 @@ function HomeTab({ metaConnected, metaError, connectedPages }: { metaConnected: 
         <PremiumCard>
           <h2 className="mb-4 text-lg font-medium">Today’s Tasks (Manual + Smart)</h2>
           <div className="mb-3 flex gap-2">
-            <input value={newTask} onChange={(e) => setNewTask(e.target.value)} placeholder="Add manual task..." className="w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm" />
-            <button onClick={addManualTask} className="rounded-lg bg-indigo-500 px-3 py-2 text-sm hover:bg-indigo-400">Add</button>
+            <input
+              value={newTask}
+              onChange={(e) => setNewTask(e.target.value)}
+              placeholder="Add manual task..."
+              className="w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm"
+            />
+            <button onClick={addManualTask} className="rounded-lg bg-indigo-500 px-3 py-2 text-sm hover:bg-indigo-400">
+              Add
+            </button>
           </div>
           <ul className="space-y-2 text-sm">
             {tasks.map((task) => (
@@ -125,7 +174,9 @@ function HomeTab({ metaConnected, metaError, connectedPages }: { metaConnected: 
                   <input type="checkbox" checked={task.done} onChange={() => toggleTask(task.id)} />
                   <span className={task.done ? "line-through text-slate-500" : ""}>{task.text}</span>
                 </label>
-                <span className="text-xs text-slate-300">{task.priority} · {task.source}</span>
+                <span className="text-xs text-slate-300">
+                  {task.priority} · {task.source}
+                </span>
               </li>
             ))}
           </ul>
@@ -139,18 +190,25 @@ function HomeTab({ metaConnected, metaError, connectedPages }: { metaConnected: 
 
       <PremiumCard>
         <h2 className="mb-3 text-lg font-medium">Connected Meta Accounts</h2>
+
         {!metaConnected && !metaError && (
           <div className="space-y-2">
             <p className="text-sm text-slate-300">No Meta accounts connected yet.</p>
-            <a href="/api/connect/meta" className="inline-flex rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium hover:bg-indigo-400">Connect Meta (Facebook + Instagram)</a>
+            <a href="/api/connect/meta" className="inline-flex rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium hover:bg-indigo-400">
+              Connect Meta (Facebook + Instagram)
+            </a>
           </div>
         )}
+
         {metaError && (
           <div className="space-y-2">
             <p className="text-sm text-red-300">❌ Meta connection failed: {metaError}</p>
-            <a href="/api/connect/meta" className="inline-flex rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium hover:bg-indigo-400">Retry Meta Connect</a>
+            <a href="/api/connect/meta" className="inline-flex rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium hover:bg-indigo-400">
+              Retry Meta Connect
+            </a>
           </div>
         )}
+
         {metaConnected && (
           <div className="space-y-2 text-sm">
             <p className="text-emerald-300">✅ Meta connected successfully</p>
@@ -161,7 +219,11 @@ function HomeTab({ metaConnected, metaError, connectedPages }: { metaConnected: 
                 {connectedPages.map((p) => (
                   <li key={p.id} className="rounded-lg border border-white/10 bg-black/20 px-3 py-2">
                     <p className="font-medium">{p.name}</p>
-                    <p className="text-slate-400">Facebook Page ID: {p.id}{p.ig ? ` · IG: @${p.ig}` : " · IG not linked"}</p>
+                    <p className="text-slate-400">
+                      Page ID: {p.id}
+                      {typeof p.fan_count === "number" ? ` · Followers: ${p.fan_count}` : " · Followers: n/a"}
+                      {p.ig ? ` · IG: @${p.ig.username ?? "unknown"} (${p.ig.id})` : " · IG not linked"}
+                    </p>
                   </li>
                 ))}
               </ul>
@@ -182,7 +244,9 @@ function StatisticsTab() {
           <h2 className="text-lg font-medium">Statistics</h2>
           <div className="flex gap-2">
             {ranges.map((r) => (
-              <button key={r} onClick={() => setRange(r)} className={`rounded-md px-3 py-1 text-xs ${range === r ? "bg-violet-500" : "bg-white/10"}`}>{r}</button>
+              <button key={r} onClick={() => setRange(r)} className={`rounded-md px-3 py-1 text-xs ${range === r ? "bg-violet-500" : "bg-white/10"}`}>
+                {r}
+              </button>
             ))}
           </div>
         </div>
@@ -222,7 +286,13 @@ function PlanningTab() {
           {days.map((day) => (
             <div key={day} onDragOver={(e) => e.preventDefault()} onDrop={() => onDropDay(day)} className="min-h-16 rounded-lg border border-white/10 bg-black/20 p-2">
               <p className="text-slate-400">{day.slice(-2)}</p>
-              {items.filter((i) => i.date === day).map((i) => <p key={i.id} className="mt-1 rounded bg-violet-500/30 px-1">{i.platform}</p>)}
+              {items
+                .filter((i) => i.date === day)
+                .map((i) => (
+                  <p key={i.id} className="mt-1 rounded bg-violet-500/30 px-1">
+                    {i.platform}
+                  </p>
+                ))}
             </div>
           ))}
         </div>
