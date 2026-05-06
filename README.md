@@ -13,6 +13,16 @@ Open daarna `http://localhost:3000`.
 
 Kopieer `.env.example` naar `.env.local` en vul de platformwaarden in. `.env.local` blijft bewust buiten Git.
 
+Voor Instagram Business Login zijn de Instagram-specifieke appwaarden nodig uit
+`Instagram API > API setup with Instagram login`:
+
+- `INSTAGRAM_CLIENT_ID`
+- `INSTAGRAM_CLIENT_SECRET`
+- `INSTAGRAM_REDIRECT_URI=https://socialmedia-dashboard-phi.vercel.app/api/connect/instagram/callback`
+
+Gebruik hiervoor niet automatisch de algemene Meta `META_APP_ID` en `META_APP_SECRET`;
+anders kan Instagram OAuth reageren met `Invalid platform app`.
+
 ## OAuth callback URLs
 
 Gebruik lokaal deze redirect URLs in de developer portals:

@@ -9,7 +9,7 @@ const profileGroups = ["personal", "newglory"] as const;
 type InstagramProfileGroup = (typeof profileGroups)[number];
 
 function getInstagramClientId() {
-  return process.env.INSTAGRAM_CLIENT_ID ?? process.env.META_APP_ID;
+  return process.env.INSTAGRAM_CLIENT_ID;
 }
 
 function getInstagramRedirectUri() {
@@ -33,7 +33,10 @@ export async function GET(req: NextRequest) {
 
   if (!clientId || !redirectUri) {
     return NextResponse.json(
-      { error: "Missing INSTAGRAM_CLIENT_ID/META_APP_ID or INSTAGRAM_REDIRECT_URI" },
+      {
+        error:
+          "Missing INSTAGRAM_CLIENT_ID or INSTAGRAM_REDIRECT_URI. Use the Instagram App ID from Instagram API > API setup with Instagram login.",
+      },
       { status: 500 }
     );
   }

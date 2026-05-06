@@ -62,11 +62,11 @@ type InstagramProfileResponse = {
 };
 
 function getInstagramClientId() {
-  return process.env.INSTAGRAM_CLIENT_ID ?? process.env.META_APP_ID;
+  return process.env.INSTAGRAM_CLIENT_ID;
 }
 
 function getInstagramClientSecret() {
-  return process.env.INSTAGRAM_CLIENT_SECRET ?? process.env.META_APP_SECRET;
+  return process.env.INSTAGRAM_CLIENT_SECRET;
 }
 
 function getInstagramRedirectUri() {
@@ -247,7 +247,8 @@ export async function GET(req: NextRequest) {
     return redirectWithInstagramStatus(appBaseUrl, {
       instagram_connected: "0",
       instagram_profile: profileGroup,
-      instagram_error: "Missing Instagram env vars",
+      instagram_error:
+        "Missing Instagram env vars. Set INSTAGRAM_CLIENT_ID and INSTAGRAM_CLIENT_SECRET from Instagram API > API setup with Instagram login.",
     });
   }
 
