@@ -2,6 +2,16 @@
 
 import { use, useEffect, useMemo, useState, type ReactNode } from "react";
 import { motion } from "framer-motion";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Legend,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
 type Tab = "Home" | "Statistics" | "Planning";
 type Range = "Day" | "Week" | "Month" | "Year";
@@ -62,6 +72,20 @@ type InstagramProfileMetric = {
   followsCount: number | null;
   mediaCount: number | null;
   connectedAt: number;
+  media?: InstagramMediaMetric[];
+  mediaMessage?: string | null;
+};
+
+type InstagramMediaMetric = {
+  id: string;
+  caption: string | null;
+  mediaType: string | null;
+  mediaUrl: string | null;
+  permalink: string | null;
+  thumbnailUrl: string | null;
+  timestamp: string | null;
+  likeCount: number | null;
+  commentsCount: number | null;
 };
 
 type InstagramMetricsResponse = {
@@ -209,8 +233,49 @@ function formatStat(value: number | null | undefined) {
   return typeof value === "number" ? new Intl.NumberFormat("en").format(value) : "n/a";
 }
 
+function formatCompactStat(value: number | null | undefined) {
+  return typeof value === "number"
+    ? new Intl.NumberFormat("en", { notation: "compact" }).format(value)
+    : "n/a";
+}
+
+function formatDate(value: string | null | undefined) {
+  if (!value) return "n/a";
+  return new Intl.DateTimeFormat("en", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(new Date(value));
+}
+
 function normalizeHandle(value: string | null | undefined) {
   return value?.replace(/^@/, "").toLowerCase() ?? "";
+}
+
+function getMediaPreviewUrl(media: InstagramMediaMetric) {
+  return media.thumbnailUrl ?? media.mediaUrl;
+}
+
+function getProfileLabel(profile: InstagramProfileMetric) {
+  return profile.profileGroup === "personal" ? "Personal" : "New Glory";
+}
+
+function getProfileDisplayName(profile: InstagramProfileMetric | undefined, fallback: string) {
+  return profile?.username ? `@${profile.username}` : fallback;
+}
+
+function getInitials(value: string) {
+  return value
+    .replace("@", "")
+    .split(/[\s._-]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join("");
+}
+
+function getPostEngagement(media: InstagramMediaMetric) {
+  return (media.likeCount ?? 0) + (media.commentsCount ?? 0);
 }
 
 async function fetchJson<T>(path: string): Promise<T> {
@@ -387,6 +452,22 @@ function HomeTab({
     liveMetrics.instagram?.profiles,
     "newglory"
   );
+  const instagramProfiles = [personalInstagram, newGloryInstagram].filter(
+    (profile): profile is InstagramProfileMetric => Boolean(profile)
+  );
+  const recentInstagramPosts = instagramProfiles
+    .flatMap((profile) =>
+      (profile.media ?? []).map((media) => ({
+        ...media,
+        profile,
+      }))
+    )
+    .sort((a, b) => {
+      const aTime = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+      const bTime = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+      return bTime - aTime;
+    })
+    .slice(0, 6);
   const linkedInOrganization = findLinkedInOrganization(
     liveMetrics.linkedin?.identity?.organizations
   );
@@ -463,7 +544,7 @@ function HomeTab({
 
         <PremiumCard>
           <h2 className="mb-3 text-lg font-medium">Recent Posts</h2>
-          <p className="text-sm text-slate-300">No post metrics shown yet. Connect Instagram / Facebook / LinkedIn to load real data.</p>
+          <InstagramRecentPosts posts={recentInstagramPosts} loading={liveMetrics.loading} />
         </PremiumCard>
       </div>
 
@@ -661,6 +742,7 @@ function LiveAccountsPanel({
               : connectedProfiles.personal.instagram
           }
           status={personalInstagram ? "Live" : "Connect Instagram"}
+          avatarUrl={personalInstagram?.profilePictureUrl}
           href={
             personalInstagram?.username
               ? `https://www.instagram.com/${personalInstagram.username}/`
@@ -674,6 +756,8 @@ function LiveAccountsPanel({
             ["Media", formatStat(personalInstagram?.mediaCount)],
             ["Type", personalInstagram?.accountType ?? "Business account required"],
           ]}
+          posts={personalInstagram?.media}
+          postsMessage={personalInstagram?.mediaMessage}
         />
 
         <AccountStatCard
@@ -693,6 +777,7 @@ function LiveAccountsPanel({
                 ? "Live via Meta"
                 : "Connect Instagram"
           }
+          avatarUrl={newGloryInstagram?.profilePictureUrl}
           href={
             newGloryInstagramUsername
               ? `https://www.instagram.com/${newGloryInstagramUsername}/`
@@ -714,6 +799,8 @@ function LiveAccountsPanel({
             ],
             ["Type", newGloryInstagram?.accountType ?? "Business account required"],
           ]}
+          posts={newGloryInstagram?.media}
+          postsMessage={newGloryInstagram?.mediaMessage}
         />
 
         <AccountStatCard
@@ -767,6 +854,107 @@ function LiveAccountsPanel({
   );
 }
 
+function ProfileAvatar({
+  imageUrl,
+  label,
+}: {
+  imageUrl?: string | null;
+  label: string;
+}) {
+  return (
+    <div
+      aria-label={`${label} profile picture`}
+      className="h-12 w-12 shrink-0 rounded-full border border-white/10 bg-indigo-500/20 bg-cover bg-center text-sm font-semibold text-white"
+      style={imageUrl ? { backgroundImage: `url(${imageUrl})` } : undefined}
+    >
+      {!imageUrl && (
+        <span className="flex h-full w-full items-center justify-center">
+          {getInitials(label) || "IG"}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function InstagramPostPreview({
+  media,
+  compact = false,
+}: {
+  media: InstagramMediaMetric;
+  compact?: boolean;
+}) {
+  const previewUrl = getMediaPreviewUrl(media);
+  const content = (
+    <div className="overflow-hidden rounded-md border border-white/10 bg-white/5">
+      <div
+        className={compact ? "aspect-square bg-black/30 bg-cover bg-center" : "aspect-video bg-black/30 bg-cover bg-center"}
+        style={previewUrl ? { backgroundImage: `url(${previewUrl})` } : undefined}
+      >
+        {!previewUrl && (
+          <div className="flex h-full items-center justify-center px-3 text-center text-xs text-slate-400">
+            No preview
+          </div>
+        )}
+      </div>
+      <div className="space-y-1 p-2 text-xs">
+        <p className="line-clamp-2 text-slate-200">{media.caption ?? media.mediaType ?? "Instagram post"}</p>
+        <p className="text-slate-400">{formatDate(media.timestamp)}</p>
+        <p className="text-slate-300">
+          {formatCompactStat(media.likeCount)} likes · {formatCompactStat(media.commentsCount)} comments
+        </p>
+      </div>
+    </div>
+  );
+
+  return media.permalink ? (
+    <a href={media.permalink} target="_blank" rel="noreferrer" className="block hover:opacity-90">
+      {content}
+    </a>
+  ) : (
+    content
+  );
+}
+
+function InstagramRecentPosts({
+  posts,
+  loading,
+}: {
+  posts: Array<InstagramMediaMetric & { profile: InstagramProfileMetric }>;
+  loading: boolean;
+}) {
+  if (loading) {
+    return <p className="text-sm text-slate-300">Loading recent Instagram posts...</p>;
+  }
+
+  if (!posts.length) {
+    return (
+      <p className="text-sm text-slate-300">
+        Connect Instagram accounts to display recent post previews here.
+      </p>
+    );
+  }
+
+  return (
+    <div className="grid gap-3 sm:grid-cols-2">
+      {posts.slice(0, 4).map((post) => (
+        <div key={`${post.profile.profileGroup}-${post.id}`} className="rounded-lg border border-white/10 bg-black/20 p-2">
+          <div className="mb-2 flex items-center gap-2">
+            <ProfileAvatar
+              imageUrl={post.profile.profilePictureUrl}
+              label={post.profile.username ?? getProfileLabel(post.profile)}
+            />
+            <div>
+              <p className="text-xs text-slate-400">{getProfileLabel(post.profile)}</p>
+              <p className="text-sm font-medium">@{post.profile.username}</p>
+            </div>
+          </div>
+          <InstagramPostPreview media={post} compact />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function AccountStatCard({
   group,
   platform,
@@ -776,6 +964,9 @@ function AccountStatCard({
   href,
   actionHref,
   actionLabel,
+  avatarUrl,
+  posts,
+  postsMessage,
 }: {
   group: string;
   platform: string;
@@ -785,13 +976,19 @@ function AccountStatCard({
   href?: string;
   actionHref?: string;
   actionLabel?: string;
+  avatarUrl?: string | null;
+  posts?: InstagramMediaMetric[];
+  postsMessage?: string | null;
 }) {
   return (
     <article className="rounded-lg border border-white/10 bg-black/20 p-4">
       <div className="mb-3 flex items-start justify-between gap-3">
-        <div>
-          <p className="text-xs uppercase text-slate-400">{group} · {platform}</p>
-          <h3 className="mt-1 text-base font-medium">{account}</h3>
+        <div className="flex min-w-0 items-center gap-3">
+          <ProfileAvatar imageUrl={avatarUrl} label={account} />
+          <div className="min-w-0">
+            <p className="text-xs uppercase text-slate-400">{group} · {platform}</p>
+            <h3 className="mt-1 truncate text-base font-medium">{account}</h3>
+          </div>
         </div>
         <span className="rounded-full bg-white/10 px-2 py-1 text-xs text-slate-300">{status}</span>
       </div>
@@ -817,14 +1014,66 @@ function AccountStatCard({
           </a>
         )}
       </div>
+
+      {posts && posts.length > 0 && (
+        <div className="mt-4">
+          <p className="mb-2 text-xs uppercase text-slate-400">Latest posts</p>
+          <div className="grid gap-2 sm:grid-cols-3">
+            {posts.slice(0, 3).map((post) => (
+              <InstagramPostPreview key={post.id} media={post} compact />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {postsMessage && (
+        <p className="mt-3 text-xs text-amber-200">{postsMessage}</p>
+      )}
     </article>
   );
 }
 
 function StatisticsTab() {
   const [range, setRange] = useState<Range>("Month");
+  const liveMetrics = useLiveMetrics();
+  const instagramProfiles = liveMetrics.instagram?.profiles ?? [];
+  const posts = instagramProfiles
+    .flatMap((profile) =>
+      (profile.media ?? []).map((media) => ({
+        ...media,
+        profile,
+      }))
+    )
+    .sort((a, b) => {
+      const aTime = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+      const bTime = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+      return bTime - aTime;
+    });
+  const chartData = instagramProfiles.map((profile) => ({
+    name: getProfileLabel(profile),
+    Followers: profile.followersCount ?? 0,
+    Following: profile.followsCount ?? 0,
+    Media: profile.mediaCount ?? 0,
+  }));
+  const totalFollowers = instagramProfiles.reduce(
+    (sum, profile) => sum + (profile.followersCount ?? 0),
+    0
+  );
+  const totalFollowing = instagramProfiles.reduce(
+    (sum, profile) => sum + (profile.followsCount ?? 0),
+    0
+  );
+  const totalMedia = instagramProfiles.reduce(
+    (sum, profile) => sum + (profile.mediaCount ?? 0),
+    0
+  );
+  const totalEngagement = posts.reduce(
+    (sum, post) => sum + getPostEngagement(post),
+    0
+  );
+
   return (
-    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-5">
       <PremiumCard>
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-lg font-medium">Statistics</h2>
@@ -836,7 +1085,150 @@ function StatisticsTab() {
             ))}
           </div>
         </div>
-        <p className="text-sm text-slate-300">{range} view selected. Connect accounts to display real charts.</p>
+        <p className="text-sm text-slate-300">
+          {liveMetrics.loading
+            ? "Loading live Instagram statistics..."
+            : `${range} view · live Instagram snapshot`}
+        </p>
+      </PremiumCard>
+
+      <div className="grid gap-4 md:grid-cols-4">
+        {[
+          ["Followers", formatStat(totalFollowers)],
+          ["Following", formatStat(totalFollowing)],
+          ["Media", formatStat(totalMedia)],
+          ["Post engagement", formatStat(totalEngagement)],
+        ].map(([label, value]) => (
+          <PremiumCard key={label}>
+            <p className="text-sm text-slate-300">{label}</p>
+            <p className="mt-3 text-2xl font-semibold">{value}</p>
+          </PremiumCard>
+        ))}
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
+        <PremiumCard>
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <h2 className="text-lg font-medium">Instagram Account Comparison</h2>
+            <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-slate-300">
+              {instagramProfiles.length} accounts
+            </span>
+          </div>
+
+          {chartData.length ? (
+            <div className="h-80">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={chartData}>
+                  <CartesianGrid stroke="rgba(255,255,255,0.08)" vertical={false} />
+                  <XAxis dataKey="name" stroke="#cbd5e1" tickLine={false} axisLine={false} />
+                  <YAxis stroke="#cbd5e1" tickLine={false} axisLine={false} />
+                  <Tooltip
+                    cursor={{ fill: "rgba(255,255,255,0.06)" }}
+                    contentStyle={{
+                      background: "#020617",
+                      border: "1px solid rgba(255,255,255,0.12)",
+                      borderRadius: 8,
+                      color: "#e2e8f0",
+                    }}
+                  />
+                  <Legend />
+                  <Bar dataKey="Followers" fill="#818cf8" radius={[6, 6, 0, 0]} />
+                  <Bar dataKey="Following" fill="#22d3ee" radius={[6, 6, 0, 0]} />
+                  <Bar dataKey="Media" fill="#f472b6" radius={[6, 6, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <p className="text-sm text-slate-300">
+              Connect Instagram accounts to display account statistics.
+            </p>
+          )}
+        </PremiumCard>
+
+        <PremiumCard>
+          <h2 className="mb-4 text-lg font-medium">Connected Profiles</h2>
+          <div className="space-y-3">
+            {instagramProfiles.length ? (
+              instagramProfiles.map((profile) => (
+                <div key={profile.profileGroup} className="rounded-lg border border-white/10 bg-black/20 p-3">
+                  <div className="flex items-center gap-3">
+                    <ProfileAvatar
+                      imageUrl={profile.profilePictureUrl}
+                      label={profile.username ?? getProfileLabel(profile)}
+                    />
+                    <div>
+                      <p className="text-xs uppercase text-slate-400">{getProfileLabel(profile)}</p>
+                      <p className="font-medium">{getProfileDisplayName(profile, "Instagram account")}</p>
+                    </div>
+                  </div>
+                  <dl className="mt-3 grid grid-cols-3 gap-2 text-sm">
+                    <div className="rounded-md bg-white/5 p-2">
+                      <dt className="text-xs text-slate-400">Followers</dt>
+                      <dd>{formatCompactStat(profile.followersCount)}</dd>
+                    </div>
+                    <div className="rounded-md bg-white/5 p-2">
+                      <dt className="text-xs text-slate-400">Following</dt>
+                      <dd>{formatCompactStat(profile.followsCount)}</dd>
+                    </div>
+                    <div className="rounded-md bg-white/5 p-2">
+                      <dt className="text-xs text-slate-400">Media</dt>
+                      <dd>{formatCompactStat(profile.mediaCount)}</dd>
+                    </div>
+                  </dl>
+                </div>
+              ))
+            ) : (
+              <p className="text-sm text-slate-300">No Instagram profiles connected yet.</p>
+            )}
+          </div>
+        </PremiumCard>
+      </div>
+
+      <PremiumCard>
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 className="text-lg font-medium">Latest Instagram Post Performance</h2>
+          <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-slate-300">
+            {posts.length} posts
+          </span>
+        </div>
+
+        {posts.length ? (
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {posts.map((post) => (
+              <div key={`${post.profile.profileGroup}-${post.id}`} className="rounded-lg border border-white/10 bg-black/20 p-3">
+                <div className="mb-3 flex items-center gap-2">
+                  <ProfileAvatar
+                    imageUrl={post.profile.profilePictureUrl}
+                    label={post.profile.username ?? getProfileLabel(post.profile)}
+                  />
+                  <div>
+                    <p className="text-xs text-slate-400">{getProfileLabel(post.profile)}</p>
+                    <p className="text-sm font-medium">{getProfileDisplayName(post.profile, "Instagram account")}</p>
+                  </div>
+                </div>
+                <InstagramPostPreview media={post} />
+                <dl className="mt-3 grid grid-cols-3 gap-2 text-sm">
+                  <div className="rounded-md bg-white/5 p-2">
+                    <dt className="text-xs text-slate-400">Likes</dt>
+                    <dd>{formatCompactStat(post.likeCount)}</dd>
+                  </div>
+                  <div className="rounded-md bg-white/5 p-2">
+                    <dt className="text-xs text-slate-400">Comments</dt>
+                    <dd>{formatCompactStat(post.commentsCount)}</dd>
+                  </div>
+                  <div className="rounded-md bg-white/5 p-2">
+                    <dt className="text-xs text-slate-400">Engagement</dt>
+                    <dd>{formatCompactStat(getPostEngagement(post))}</dd>
+                  </div>
+                </dl>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-slate-300">
+            Recent Instagram posts will appear here after the connected account token can read media.
+          </p>
+        )}
       </PremiumCard>
     </motion.div>
   );

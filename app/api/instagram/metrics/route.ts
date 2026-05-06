@@ -39,6 +39,27 @@ type InstagramProfileResponse = {
   };
 };
 
+type InstagramMedia = {
+  id?: string;
+  caption?: string;
+  media_type?: string;
+  media_url?: string;
+  permalink?: string;
+  thumbnail_url?: string;
+  timestamp?: string;
+  like_count?: number;
+  comments_count?: number;
+};
+
+type InstagramMediaResponse = {
+  data?: InstagramMedia[];
+  error?: {
+    message?: string;
+    type?: string;
+    code?: number;
+  };
+};
+
 function parseStoredProfiles(raw: string | undefined) {
   if (!raw) return [];
 
@@ -100,6 +121,54 @@ async function fetchInstagramProfile(profile: StoredInstagramProfile) {
   };
 }
 
+async function fetchInstagramMedia(accessToken: string) {
+  const fullFields =
+    "id,caption,media_type,media_url,permalink,thumbnail_url,timestamp,like_count,comments_count";
+  const basicFields =
+    "id,caption,media_type,media_url,permalink,thumbnail_url,timestamp";
+
+  async function requestMedia(fields: string) {
+    const url = new URL("https://graph.instagram.com/me/media");
+    url.searchParams.set("fields", fields);
+    url.searchParams.set("limit", "6");
+    url.searchParams.set("access_token", accessToken);
+
+    const res = await fetch(url.toString(), { cache: "no-store" });
+    return {
+      ok: res.ok,
+      data: (await res.json()) as InstagramMediaResponse,
+    };
+  }
+
+  const fullResult = await requestMedia(fullFields);
+  if (fullResult.ok) {
+    return {
+      ok: true,
+      media: fullResult.data.data ?? [],
+      message: null,
+    };
+  }
+
+  const basicResult = await requestMedia(basicFields);
+  if (basicResult.ok) {
+    return {
+      ok: true,
+      media: basicResult.data.data ?? [],
+      message:
+        "Post previews loaded. Engagement counts require additional Instagram permissions.",
+    };
+  }
+
+  return {
+    ok: false,
+    media: [],
+    message:
+      fullResult.data.error?.message ??
+      basicResult.data.error?.message ??
+      "Instagram media refresh failed.",
+  };
+}
+
 function sanitizeProfile(
   profile: Awaited<ReturnType<typeof fetchInstagramProfile>>
 ) {
@@ -108,6 +177,38 @@ function sanitizeProfile(
     message: "message" in profile ? profile.message : undefined,
     profileGroup: profile.profileGroup,
     instagramUserId: profile.instagramUserId,
+    username: profile.username,
+    name: profile.name,
+    accountType: profile.accountType,
+    profilePictureUrl: profile.profilePictureUrl,
+    followersCount: profile.followersCount,
+    followsCount: profile.followsCount,
+    mediaCount: profile.mediaCount,
+    connectedAt: profile.connectedAt,
+  };
+}
+
+function sanitizeMedia(media: InstagramMedia[]) {
+  return media.map((item) => ({
+    id: item.id ?? "",
+    caption: item.caption ?? null,
+    mediaType: item.media_type ?? null,
+    mediaUrl: item.media_url ?? null,
+    permalink: item.permalink ?? null,
+    thumbnailUrl: item.thumbnail_url ?? null,
+    timestamp: item.timestamp ?? null,
+    likeCount: typeof item.like_count === "number" ? item.like_count : null,
+    commentsCount:
+      typeof item.comments_count === "number" ? item.comments_count : null,
+  }));
+}
+
+function toStoredProfile(profile: StoredInstagramProfile): StoredInstagramProfile {
+  return {
+    profileGroup: profile.profileGroup,
+    instagramUserId: profile.instagramUserId,
+    accessToken: profile.accessToken,
+    accessTokenExpiresAt: profile.accessTokenExpiresAt,
     username: profile.username,
     name: profile.name,
     accountType: profile.accountType,
@@ -131,7 +232,30 @@ export async function GET() {
     );
   }
 
-  const refreshedProfiles = await Promise.all(profiles.map(fetchInstagramProfile));
+  const refreshedProfiles = await Promise.all(
+    profiles.map(async (profile) => {
+      const refreshedProfile = await fetchInstagramProfile(profile);
+      const mediaResult = refreshedProfile.ok
+        ? await fetchInstagramMedia(refreshedProfile.accessToken)
+        : {
+            ok: false,
+            media: [],
+            message:
+              "message" in refreshedProfile
+                ? refreshedProfile.message
+                : "Instagram profile refresh failed.",
+          };
+
+      return {
+        cookieProfile: toStoredProfile(refreshedProfile),
+        responseProfile: {
+          ...sanitizeProfile(refreshedProfile),
+          media: sanitizeMedia(mediaResult.media),
+          mediaMessage: mediaResult.message,
+        },
+      };
+    })
+  );
   const now = Date.now();
   const cookieMaxAge = Math.min(
     ...profiles.map((profile) =>
@@ -142,13 +266,13 @@ export async function GET() {
   );
 
   const response = NextResponse.json({
-    ok: refreshedProfiles.every((profile) => profile.ok),
+    ok: refreshedProfiles.every((profile) => profile.responseProfile.ok),
     source: "cookie",
     count: refreshedProfiles.length,
-    profiles: refreshedProfiles.map(sanitizeProfile),
+    profiles: refreshedProfiles.map((profile) => profile.responseProfile),
   });
 
-  response.cookies.set(INSTAGRAM_AUTH_COOKIE, JSON.stringify(refreshedProfiles), {
+  response.cookies.set(INSTAGRAM_AUTH_COOKIE, JSON.stringify(refreshedProfiles.map((profile) => profile.cookieProfile)), {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
