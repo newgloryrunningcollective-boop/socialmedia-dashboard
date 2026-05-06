@@ -307,6 +307,14 @@ export default function DashboardPage({ searchParams }: { searchParams: Dashboar
         <header className="mb-6 rounded-2xl border border-white/10 bg-white/5 p-6 shadow-2xl backdrop-blur-xl">
           <h1 className="text-3xl font-semibold tracking-tight">Social Analytics Suite</h1>
           <p className="mt-1 text-slate-300">Premium multi-account command center · Desktop-first</p>
+          <div className="mt-3 flex gap-3 text-xs text-slate-300">
+            <a href="/privacy" className="underline hover:text-white">
+              Privacy Policy
+            </a>
+            <a href="/terms" className="underline hover:text-white">
+              Terms of Service
+            </a>
+          </div>
         </header>
 
         <nav className="mb-6 flex gap-2 rounded-xl border border-white/10 bg-white/5 p-2 backdrop-blur">
