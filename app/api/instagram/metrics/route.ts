@@ -2,8 +2,10 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 const INSTAGRAM_AUTH_COOKIE = "instagram_profiles";
+const META_PAGES_COOKIE = "meta_pages";
 const SIXTY_DAYS = 60 * 60 * 24 * 60;
 const INSTAGRAM_GRAPH_ORIGIN = "https://graph.instagram.com";
+const FACEBOOK_GRAPH_ORIGIN = "https://graph.facebook.com/v20.0";
 const MEDIA_FETCH_LIMIT = 100;
 const MEDIA_RETURN_LIMIT = 24;
 const MEDIA_INSIGHTS_LIMIT = 18;
@@ -25,6 +27,14 @@ type StoredInstagramProfile = {
   followsCount: number | null;
   mediaCount: number | null;
   connectedAt: number;
+};
+
+type StoredPage = {
+  pageId: string;
+  pageName: string;
+  pageAccessToken: string;
+  igBusinessId: string | null;
+  igUsername: string | null;
 };
 
 type InstagramProfileResponse = {
@@ -142,6 +152,38 @@ function parseStoredProfiles(raw: string | undefined) {
   } catch {
     return [];
   }
+}
+
+function parseStoredPages(raw: string | undefined) {
+  if (!raw) return [];
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<StoredPage>[];
+    return Array.isArray(parsed)
+      ? parsed.filter(
+          (page): page is StoredPage =>
+            typeof page.pageId === "string" &&
+            typeof page.pageName === "string" &&
+            typeof page.pageAccessToken === "string" &&
+            (page.igBusinessId === null || typeof page.igBusinessId === "string") &&
+            (page.igUsername === null || typeof page.igUsername === "string")
+        )
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function findMetaPageForProfile(
+  pages: StoredPage[],
+  profile: StoredInstagramProfile
+) {
+  const username = profile.username?.toLowerCase();
+  if (!username) return null;
+
+  return (
+    pages.find((page) => page.igUsername?.toLowerCase() === username) ?? null
+  );
 }
 
 function getLastThirtyFullDays() {
@@ -353,6 +395,17 @@ async function fetchMediaCollection(
         message: null,
       };
     }
+
+    if (edge === "tags" && instagramUserId) {
+      const meResult = await requestMediaEdge(edge, accessToken, fields);
+      if (meResult.ok) {
+        return {
+          ok: true,
+          media: meResult.data.data ?? [],
+          message: null,
+        };
+      }
+    }
   }
 
   const fallback = await requestMediaEdge(edge, accessToken, basicFields, instagramUserId);
@@ -360,6 +413,69 @@ async function fetchMediaCollection(
     ok: false,
     media: [],
     message: fallback.data.error?.message ?? `Instagram ${edge} refresh failed.`,
+  };
+}
+
+async function requestMetaMediaEdge(
+  page: StoredPage,
+  edge: "tags" | "mentioned_media",
+  fields: string
+) {
+  if (!page.igBusinessId) {
+    return {
+      ok: false,
+      data: { data: [] } as InstagramMediaResponse,
+    };
+  }
+
+  const url = new URL(`${FACEBOOK_GRAPH_ORIGIN}/${page.igBusinessId}/${edge}`);
+  url.searchParams.set("fields", fields);
+  url.searchParams.set("limit", String(MEDIA_RETURN_LIMIT));
+  url.searchParams.set("access_token", page.pageAccessToken);
+
+  const res = await fetch(url.toString(), { cache: "no-store" });
+  return {
+    ok: res.ok,
+    data: (await res.json()) as InstagramMediaResponse,
+  };
+}
+
+async function fetchMetaMediaCollection(
+  page: StoredPage | null,
+  edge: "tags" | "mentioned_media"
+) {
+  if (!page?.igBusinessId) {
+    return {
+      ok: false,
+      media: [],
+      message:
+        "Contributor posts need the Instagram account to be linked to a connected Meta/Facebook Page.",
+    };
+  }
+
+  const richFields =
+    "id,caption,media_type,media_product_type,media_url,permalink,thumbnail_url,timestamp,username,owner{id,username},like_count,comments_count";
+  const basicFields =
+    "id,caption,media_type,media_url,permalink,thumbnail_url,timestamp,username";
+
+  for (const fields of [richFields, basicFields]) {
+    const result = await requestMetaMediaEdge(page, edge, fields);
+    if (result.ok) {
+      return {
+        ok: true,
+        media: result.data.data ?? [],
+        message: null,
+      };
+    }
+  }
+
+  const fallback = await requestMetaMediaEdge(page, edge, basicFields);
+  return {
+    ok: false,
+    media: [],
+    message:
+      fallback.data.error?.message ??
+      "Contributor posts need Meta Instagram tagged-media access for this account.",
   };
 }
 
@@ -625,7 +741,9 @@ function toStoredProfile(profile: StoredInstagramProfile): StoredInstagramProfil
 export async function GET() {
   const cookieStore = await cookies();
   const raw = cookieStore.get(INSTAGRAM_AUTH_COOKIE)?.value;
+  const rawMetaPages = cookieStore.get(META_PAGES_COOKIE)?.value;
   const profiles = parseStoredProfiles(raw);
+  const metaPages = parseStoredPages(rawMetaPages);
 
   if (!profiles.length) {
     return NextResponse.json(
@@ -663,7 +781,15 @@ export async function GET() {
         };
       }
 
-      const [profileInsights, ownedMediaResult, storyResult, taggedMediaResult] =
+      const metaPage = findMetaPageForProfile(metaPages, refreshedProfile);
+      const [
+        profileInsights,
+        ownedMediaResult,
+        storyResult,
+        taggedMediaResult,
+        metaTaggedMediaResult,
+        metaMentionedMediaResult,
+      ] =
         await Promise.all([
           fetchInstagramProfileInsights(refreshedProfile.accessToken),
           fetchMediaCollection("media", refreshedProfile.accessToken),
@@ -673,6 +799,8 @@ export async function GET() {
             refreshedProfile.accessToken,
             refreshedProfile.instagramUserId
           ),
+          fetchMetaMediaCollection(metaPage, "tags"),
+          fetchMetaMediaCollection(metaPage, "mentioned_media"),
         ]);
 
       const ownedMedia = ownedMediaResult.media.map((item) => ({
@@ -688,7 +816,21 @@ export async function GET() {
         ...item,
         sourceType: inferSourceType(item, refreshedProfile, "tagged"),
       }));
-      const allMedia = dedupeMedia([...stories, ...ownedMedia, ...taggedMedia]).sort(
+      const metaTaggedMedia = metaTaggedMediaResult.media.map((item) => ({
+        ...item,
+        sourceType: inferSourceType(item, refreshedProfile, "tagged"),
+      }));
+      const metaMentionedMedia = metaMentionedMediaResult.media.map((item) => ({
+        ...item,
+        sourceType: inferSourceType(item, refreshedProfile, "tagged"),
+      }));
+      const allMedia = dedupeMedia([
+        ...stories,
+        ...ownedMedia,
+        ...taggedMedia,
+        ...metaTaggedMedia,
+        ...metaMentionedMedia,
+      ]).sort(
         (a, b) => {
           const aTime = a.timestamp ? new Date(a.timestamp).getTime() : 0;
           const bTime = b.timestamp ? new Date(b.timestamp).getTime() : 0;
@@ -705,30 +847,42 @@ export async function GET() {
         profileInsights.summary.rangeStart,
         profileInsights.summary.rangeEnd
       );
-      const collaboratorMedia = enrichedMedia.filter(
-        (item) => inferSourceType(item, refreshedProfile) === "collaborator"
-      ).length;
+      const nonStoryMedia = enrichedMedia.filter(
+        (item) => inferSourceType(item, refreshedProfile) !== "story"
+      );
+      const collaboratorMedia = enrichedMedia.filter((item) => {
+        const sourceType = inferSourceType(item, refreshedProfile);
+        return sourceType === "collaborator" || sourceType === "tagged";
+      }).length;
       const contentMessages = [
         ownedMediaResult.ok ? null : ownedMediaResult.message,
       ].filter(Boolean);
+      const contributorMessage =
+        collaboratorMedia > 0
+          ? null
+          : metaPage
+            ? "No contributor posts were returned by Meta for this account. If a collaboration is missing, reconnect Meta/Facebook with the Page linked to this Instagram account and make sure the app has Instagram tagged-media access."
+            : "Contributor posts need Meta connected for this Instagram account. Connect Meta/Facebook with the Page that owns this Instagram account, then reconnect Instagram.";
 
       return {
         cookieProfile: toStoredProfile(refreshedProfile),
         responseProfile: {
           ...sanitizeProfile(refreshedProfile),
-          media: sanitizeMedia(enrichedMedia, refreshedProfile),
+          media: sanitizeMedia(nonStoryMedia, refreshedProfile),
           stories: sanitizeMedia(stories, refreshedProfile),
           contentSummary: {
             rangeStart: profileInsights.summary.rangeStart,
             rangeEnd: profileInsights.summary.rangeEnd,
             contentShared: contentSharedFallback || null,
             feedMedia: ownedMedia.length,
-            taggedMedia: taggedMedia.length,
+            taggedMedia:
+              taggedMedia.length + metaTaggedMedia.length + metaMentionedMedia.length,
             collaboratorMedia,
             activeStories: stories.length,
           },
           insights: profileInsights.summary,
           mediaMessage: contentMessages.length ? contentMessages.join(" ") : null,
+          contributorMessage,
           insightsMessage: profileInsights.message,
         },
       };

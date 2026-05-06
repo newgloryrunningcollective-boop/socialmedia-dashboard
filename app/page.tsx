@@ -105,6 +105,7 @@ type InstagramProfileMetric = {
   contentSummary?: InstagramContentSummary;
   insights?: InstagramProfileInsights | null;
   mediaMessage?: string | null;
+  contributorMessage?: string | null;
   insightsMessage?: string | null;
 };
 
@@ -380,6 +381,22 @@ function getProfileContent(profile: InstagramProfileMetric) {
       const bTime = b.timestamp ? new Date(b.timestamp).getTime() : 0;
       return bTime - aTime;
     });
+}
+
+function getRegularPosts(profile: InstagramProfileMetric | undefined) {
+  return (profile?.media ?? []).filter(
+    (item) => item.sourceType !== "story" && item.sourceType !== "collaborator" && item.sourceType !== "tagged"
+  );
+}
+
+function getContributorPosts(profile: InstagramProfileMetric | undefined) {
+  return (profile?.media ?? []).filter(
+    (item) => item.sourceType === "collaborator" || item.sourceType === "tagged"
+  );
+}
+
+function getStories(profile: InstagramProfileMetric | undefined) {
+  return profile?.stories ?? [];
 }
 
 function sumProfileInsights(
@@ -880,8 +897,11 @@ function LiveAccountsPanel({
             ["Shared", formatStat(personalInstagram?.contentSummary?.contentShared)],
             ["Type", personalInstagram?.accountType ?? "Business account required"],
           ]}
-          posts={personalInstagram ? getProfileContent(personalInstagram) : undefined}
+          posts={getRegularPosts(personalInstagram)}
+          stories={getStories(personalInstagram)}
+          contributorPosts={getContributorPosts(personalInstagram)}
           postsMessage={personalInstagram?.mediaMessage}
+          contributorMessage={personalInstagram?.contributorMessage}
           insightsMessage={personalInstagram?.insightsMessage}
         />
 
@@ -927,8 +947,11 @@ function LiveAccountsPanel({
             ["Shared", formatStat(newGloryInstagram?.contentSummary?.contentShared)],
             ["Type", newGloryInstagram?.accountType ?? "Business account required"],
           ]}
-          posts={newGloryInstagram ? getProfileContent(newGloryInstagram) : undefined}
+          posts={getRegularPosts(newGloryInstagram)}
+          stories={getStories(newGloryInstagram)}
+          contributorPosts={getContributorPosts(newGloryInstagram)}
           postsMessage={newGloryInstagram?.mediaMessage}
+          contributorMessage={newGloryInstagram?.contributorMessage}
           insightsMessage={newGloryInstagram?.insightsMessage}
         />
 
@@ -1118,7 +1141,10 @@ function AccountStatCard({
   actionLabel,
   avatarUrl,
   posts,
+  stories,
+  contributorPosts,
   postsMessage,
+  contributorMessage,
   insightsMessage,
 }: {
   group: string;
@@ -1131,7 +1157,10 @@ function AccountStatCard({
   actionLabel?: string;
   avatarUrl?: string | null;
   posts?: InstagramMediaMetric[];
+  stories?: InstagramMediaMetric[];
+  contributorPosts?: InstagramMediaMetric[];
   postsMessage?: string | null;
+  contributorMessage?: string | null;
   insightsMessage?: string | null;
 }) {
   return (
@@ -1171,7 +1200,7 @@ function AccountStatCard({
 
       {posts && posts.length > 0 && (
         <div className="mt-4">
-          <p className="mb-2 text-xs uppercase text-slate-400">Latest content</p>
+          <p className="mb-2 text-xs uppercase text-slate-400">Latest posts</p>
           <div className="grid gap-2 sm:grid-cols-3">
             {posts.slice(0, 3).map((post) => (
               <InstagramPostPreview key={post.id} media={post} compact />
@@ -1180,8 +1209,34 @@ function AccountStatCard({
         </div>
       )}
 
+      {stories && stories.length > 0 && (
+        <div className="mt-4">
+          <p className="mb-2 text-xs uppercase text-cyan-100">Active stories</p>
+          <div className="grid gap-2 sm:grid-cols-3">
+            {stories.slice(0, 3).map((story) => (
+              <InstagramPostPreview key={story.id} media={story} compact />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {contributorPosts && contributorPosts.length > 0 && (
+        <div className="mt-4">
+          <p className="mb-2 text-xs uppercase text-amber-100">Contributor posts</p>
+          <div className="grid gap-2 sm:grid-cols-3">
+            {contributorPosts.slice(0, 3).map((post) => (
+              <InstagramPostPreview key={post.id} media={post} compact />
+            ))}
+          </div>
+        </div>
+      )}
+
       {postsMessage && (
         <p className="mt-3 text-xs text-amber-200">{postsMessage}</p>
+      )}
+
+      {contributorMessage && (
+        <p className="mt-2 text-xs text-amber-200">{contributorMessage}</p>
       )}
 
       {insightsMessage && (
@@ -1195,7 +1250,7 @@ function StatisticsTab() {
   const [range, setRange] = useState<Range>("Month");
   const liveMetrics = useLiveMetrics();
   const instagramProfiles = liveMetrics.instagram?.profiles ?? [];
-  const posts = instagramProfiles
+  const contentItems = instagramProfiles
     .flatMap((profile) =>
       getProfileContent(profile).map((media) => ({
         ...media,
@@ -1207,8 +1262,17 @@ function StatisticsTab() {
       const bTime = b.timestamp ? new Date(b.timestamp).getTime() : 0;
       return bTime - aTime;
     });
-  const contributorPosts = posts.filter(
+  const posts = contentItems.filter((post) => post.sourceType !== "story");
+  const storyPosts = contentItems.filter((post) => post.sourceType === "story");
+  const contributorPosts = contentItems.filter(
     (post) => post.sourceType === "collaborator" || post.sourceType === "tagged"
+  );
+  const contributorMessages = Array.from(
+    new Set(
+      instagramProfiles
+        .map((profile) => profile.contributorMessage)
+        .filter((message): message is string => Boolean(message))
+    )
   );
   const chartData = instagramProfiles.map((profile) => ({
     name: getProfileLabel(profile),
@@ -1234,7 +1298,7 @@ function StatisticsTab() {
   const totalViews = insightViews || postViews;
   const totalInteractions = insightInteractions || postInteractions;
   const totalNewFollowers = sumProfileInsights(instagramProfiles, "follows");
-  const totalSharedContent = sumProfileContent(instagramProfiles) || posts.length;
+  const totalSharedContent = sumProfileContent(instagramProfiles) || contentItems.length;
   const totalStories = instagramProfiles.reduce(
     (sum, profile) => sum + (profile.contentSummary?.activeStories ?? 0),
     0
@@ -1446,6 +1510,39 @@ function StatisticsTab() {
 
       <PremiumCard>
         <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 className="text-lg font-medium">Active Instagram Stories</h2>
+          <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-slate-300">
+            {storyPosts.length} stories
+          </span>
+        </div>
+
+        {storyPosts.length ? (
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {storyPosts.map((story) => (
+              <div key={`story-${story.profile.profileGroup}-${story.id}`} className="rounded-lg border border-cyan-300/20 bg-cyan-400/10 p-3">
+                <div className="mb-3 flex items-center gap-2">
+                  <ProfileAvatar
+                    imageUrl={story.profile.profilePictureUrl}
+                    label={story.profile.username ?? getProfileLabel(story.profile)}
+                  />
+                  <div>
+                    <p className="text-xs text-cyan-100">Story on {getProfileLabel(story.profile)}</p>
+                    <p className="text-sm font-medium">{getProfileDisplayName(story.profile, "Instagram account")}</p>
+                  </div>
+                </div>
+                <InstagramPostPreview media={story} />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-slate-300">
+            Active Instagram stories will appear here separately from regular posts.
+          </p>
+        )}
+      </PremiumCard>
+
+      <PremiumCard>
+        <div className="mb-4 flex items-center justify-between gap-3">
           <h2 className="text-lg font-medium">Contributor Content</h2>
           <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-slate-300">
             {contributorPosts.length} items
@@ -1471,9 +1568,12 @@ function StatisticsTab() {
             ))}
           </div>
         ) : (
-          <p className="text-sm text-slate-300">
-            Contributor posts will appear here when Instagram returns tagged or collaborator media for the connected account.
-          </p>
+          <div className="space-y-2 text-sm text-slate-300">
+            <p>Contributor posts will appear here when Instagram returns tagged or collaborator media for the connected account.</p>
+            {contributorMessages.map((message) => (
+              <p key={message} className="text-amber-200">{message}</p>
+            ))}
+          </div>
         )}
       </PremiumCard>
     </motion.div>
