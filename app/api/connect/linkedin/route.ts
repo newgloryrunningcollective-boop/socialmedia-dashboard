@@ -8,7 +8,7 @@ const PERSONAL_LINKEDIN_SCOPES = [
 ];
 const ORGANIZATION_LINKEDIN_SCOPES = [
   ...PERSONAL_LINKEDIN_SCOPES,
-  "rw_organization_admin",
+  "r_organization_admin",
 ];
 
 function getLinkedInScopes(mode: string | null) {

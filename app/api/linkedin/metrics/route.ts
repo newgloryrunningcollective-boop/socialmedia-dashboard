@@ -96,6 +96,13 @@ function parseLinkedInAccessCookie(raw: string | undefined) {
   }
 }
 
+function hasLinkedInScope(
+  accessCookie: { scope: string | null } | null,
+  scope: string
+) {
+  return Boolean(accessCookie?.scope?.split(/\s+/).includes(scope));
+}
+
 async function fetchLinkedInJson<T extends LinkedInApiError>(
   url: string,
   accessToken: string
@@ -173,11 +180,26 @@ async function fetchPersonalConnections(
 
 async function enrichPersonalProfile(
   personalProfile: LinkedInIdentity["personalProfile"],
-  accessToken: string
+  accessCookie: { accessToken: string; scope: string | null }
 ): Promise<LinkedInIdentity["personalProfile"]> {
+  const accessToken = accessCookie.accessToken;
+  const canReadFollowers = hasLinkedInScope(accessCookie, "r_member_profileAnalytics");
+  const canReadConnections = hasLinkedInScope(accessCookie, "r_1st_connections_size");
   const [followers, connections] = await Promise.all([
-    fetchPersonalFollowers(accessToken),
-    fetchPersonalConnections(personalProfile.personId, accessToken),
+    canReadFollowers
+      ? fetchPersonalFollowers(accessToken)
+      : Promise.resolve({
+          followersCount: null,
+          message:
+            "LinkedIn follower count requires LinkedIn approval for r_member_profileAnalytics.",
+        }),
+    canReadConnections
+      ? fetchPersonalConnections(personalProfile.personId, accessToken)
+      : Promise.resolve({
+          connectionsCount: null,
+          message:
+            "LinkedIn connection count requires LinkedIn approval for r_1st_connections_size.",
+        }),
   ]);
   const messages = [followers.message, connections.message].filter(
     (message): message is string => Boolean(message)
@@ -187,7 +209,7 @@ async function enrichPersonalProfile(
     ...personalProfile,
     followersCount: followers.followersCount,
     connectionsCount: connections.connectionsCount,
-    message: messages[0] ?? null,
+    message: messages.join(" ") || null,
   };
 }
 
@@ -290,8 +312,21 @@ async function fetchOrganizationShareStatistics(
 
 async function enrichOrganizationMetrics(
   organization: LinkedInOrganizationMetric,
-  accessToken: string
+  accessCookie: { accessToken: string; scope: string | null }
 ): Promise<LinkedInOrganizationMetric> {
+  const accessToken = accessCookie.accessToken;
+  const canReadOrganization =
+    hasLinkedInScope(accessCookie, "r_organization_admin") ||
+    hasLinkedInScope(accessCookie, "rw_organization_admin");
+
+  if (!canReadOrganization) {
+    return {
+      ...organization,
+      message:
+        "New Glory LinkedIn stats require LinkedIn approval for r_organization_admin.",
+    };
+  }
+
   const [followers, followerBreakdown, shareStatistics] = await Promise.all([
     fetchOrganizationFollowers(organization.id, accessToken),
     fetchOrganizationFollowerBreakdown(organization.id, accessToken),
@@ -335,7 +370,7 @@ export async function GET() {
   try {
     const identity: LinkedInIdentity = JSON.parse(raw);
     const personalProfile = accessCookie
-      ? await enrichPersonalProfile(identity.personalProfile, accessCookie.accessToken)
+      ? await enrichPersonalProfile(identity.personalProfile, accessCookie)
       : {
           ...identity.personalProfile,
           message:
@@ -344,7 +379,7 @@ export async function GET() {
     const organizations = accessCookie
       ? await Promise.all(
           identity.organizations.map((organization) =>
-            enrichOrganizationMetrics(organization, accessCookie.accessToken)
+            enrichOrganizationMetrics(organization, accessCookie)
           )
         )
       : identity.organizations.map((organization) => ({

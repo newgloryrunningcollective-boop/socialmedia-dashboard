@@ -31,12 +31,35 @@ type LinkedInTokenResponse = {
   access_token?: string;
   expires_in?: number;
   scope?: string;
+  error?: string;
+  error_description?: string;
 };
 
 function isLinkedInOrganization(
   value: { id: string; name: string } | null
 ): value is { id: string; name: string } {
   return Boolean(value);
+}
+
+function redirectWithLinkedInStatus(
+  appBaseUrl: string,
+  params: Record<string, string>
+) {
+  const url = new URL(appBaseUrl);
+  Object.entries(params).forEach(([key, value]) => {
+    url.searchParams.set(key, value);
+  });
+
+  const response = NextResponse.redirect(url);
+  response.cookies.set("linkedin_oauth_state", "", {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: 0,
+  });
+
+  return response;
 }
 
 async function fetchLinkedInIdentity(accessToken: string): Promise<LinkedInIdentity> {
@@ -86,6 +109,7 @@ export async function GET(req: NextRequest) {
   const code = req.nextUrl.searchParams.get("code");
   const state = req.nextUrl.searchParams.get("state");
   const error = req.nextUrl.searchParams.get("error");
+  const errorDescription = req.nextUrl.searchParams.get("error_description");
 
   const stateCookie = req.cookies.get("linkedin_oauth_state")?.value;
   const clientId = process.env.LINKEDIN_CLIENT_ID;
@@ -93,12 +117,32 @@ export async function GET(req: NextRequest) {
   const redirectUri = process.env.LINKEDIN_REDIRECT_URI;
   const appBaseUrl = process.env.NEXTAUTH_URL ?? "http://localhost:3000";
 
-  if (error || !code || !state || !stateCookie || state !== stateCookie) {
-    return NextResponse.redirect(`${appBaseUrl}?linkedin_connected=0`);
+  if (error) {
+    return redirectWithLinkedInStatus(appBaseUrl, {
+      linkedin_connected: "0",
+      linkedin_error: errorDescription || error,
+    });
+  }
+
+  if (!code) {
+    return redirectWithLinkedInStatus(appBaseUrl, {
+      linkedin_connected: "0",
+      linkedin_error: "Missing code in callback",
+    });
+  }
+
+  if (!state || !stateCookie || state !== stateCookie) {
+    return redirectWithLinkedInStatus(appBaseUrl, {
+      linkedin_connected: "0",
+      linkedin_error: "Invalid OAuth state",
+    });
   }
 
   if (!clientId || !clientSecret || !redirectUri) {
-    return NextResponse.redirect(`${appBaseUrl}?linkedin_connected=0`);
+    return redirectWithLinkedInStatus(appBaseUrl, {
+      linkedin_connected: "0",
+      linkedin_error: "Missing LinkedIn env vars",
+    });
   }
 
   const body = new URLSearchParams({
@@ -117,7 +161,11 @@ export async function GET(req: NextRequest) {
   const tokenJson = (await tokenRes.json()) as LinkedInTokenResponse;
 
   if (!tokenRes.ok || !tokenJson.access_token) {
-    return NextResponse.redirect(`${appBaseUrl}?linkedin_connected=0`);
+    return redirectWithLinkedInStatus(appBaseUrl, {
+      linkedin_connected: "0",
+      linkedin_error:
+        tokenJson.error_description || tokenJson.error || "Token exchange failed",
+    });
   }
 
   const accessToken = String(tokenJson.access_token);
@@ -127,7 +175,9 @@ export async function GET(req: NextRequest) {
       ? tokenJson.expires_in
       : SIXTY_DAYS;
 
-  const response = NextResponse.redirect(`${appBaseUrl}?linkedin_connected=1`);
+  const response = redirectWithLinkedInStatus(appBaseUrl, {
+    linkedin_connected: "1",
+  });
   response.cookies.set("linkedin_identity", JSON.stringify(identity), {
     httpOnly: true,
     sameSite: "lax",
@@ -151,14 +201,6 @@ export async function GET(req: NextRequest) {
       maxAge: Math.min(expiresIn, SIXTY_DAYS),
     }
   );
-
-  response.cookies.set("linkedin_oauth_state", "", {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    path: "/",
-    maxAge: 0,
-  });
 
   return response;
 }

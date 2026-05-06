@@ -264,6 +264,7 @@ type ConnectionSummary = {
   instagramError: string | null;
   linkedInConnected: boolean;
   linkedInError: boolean;
+  linkedInErrorMessage: string | null;
   threadsConnected: boolean;
   threadsError: string | null;
   tikTokConnected: boolean;
@@ -347,6 +348,10 @@ function parseConnectionSummary(params: Record<string, string | string[] | undef
         : null,
     linkedInConnected: linkedInStatus === "1",
     linkedInError: linkedInStatus === "0",
+    linkedInErrorMessage:
+      linkedInStatus === "0"
+        ? firstParam(params.linkedin_error) ?? "LinkedIn connection failed."
+        : null,
     threadsConnected: threadsStatus === "1",
     threadsError:
       threadsStatus === "0"
@@ -663,6 +668,7 @@ function HomeTab({
   instagramError,
   linkedInConnected,
   linkedInError,
+  linkedInErrorMessage,
   threadsConnected,
   threadsError,
   tikTokConnected,
@@ -676,6 +682,7 @@ function HomeTab({
   instagramError: string | null;
   linkedInConnected: boolean;
   linkedInError: boolean;
+  linkedInErrorMessage: string | null;
   threadsConnected: boolean;
   threadsError: string | null;
   tikTokConnected: boolean;
@@ -918,7 +925,11 @@ function HomeTab({
             </div>
           ) : (
             <div className="space-y-2">
-              {linkedInError && <p className="text-sm text-red-300">LinkedIn connection failed.</p>}
+              {linkedInError && (
+                <p className="text-sm text-red-300">
+                  LinkedIn connection failed: {linkedInErrorMessage}
+                </p>
+              )}
               <p className="text-sm text-slate-300">No LinkedIn account connected yet.</p>
               <a href="/api/connect/linkedin" className="inline-flex rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium hover:bg-indigo-400">
                 Connect LinkedIn
