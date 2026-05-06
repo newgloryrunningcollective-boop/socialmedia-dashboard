@@ -3,8 +3,10 @@ import { NextRequest, NextResponse } from "next/server";
 const INSTAGRAM_OAUTH_STATE_COOKIE = "instagram_oauth_state";
 const INSTAGRAM_OAUTH_PROFILE_COOKIE = "instagram_oauth_profile";
 const TEN_MINUTES = 60 * 10;
-const DEFAULT_INSTAGRAM_SCOPES =
-  "instagram_business_basic,instagram_business_manage_insights";
+const REQUIRED_INSTAGRAM_SCOPES = [
+  "instagram_business_basic",
+  "instagram_business_manage_insights",
+];
 const profileGroups = ["personal", "newglory"] as const;
 
 type InstagramProfileGroup = (typeof profileGroups)[number];
@@ -20,6 +22,14 @@ function getInstagramRedirectUri() {
   );
 }
 
+function getInstagramScopes() {
+  const configuredScopes =
+    process.env.INSTAGRAM_SCOPES?.split(",").map((scope) => scope.trim()).filter(Boolean) ??
+    [];
+
+  return Array.from(new Set([...configuredScopes, ...REQUIRED_INSTAGRAM_SCOPES])).join(",");
+}
+
 function getProfileGroup(value: string | null): InstagramProfileGroup {
   return profileGroups.includes(value as InstagramProfileGroup)
     ? (value as InstagramProfileGroup)
@@ -29,7 +39,7 @@ function getProfileGroup(value: string | null): InstagramProfileGroup {
 export async function GET(req: NextRequest) {
   const clientId = getInstagramClientId();
   const redirectUri = getInstagramRedirectUri();
-  const scopes = process.env.INSTAGRAM_SCOPES ?? DEFAULT_INSTAGRAM_SCOPES;
+  const scopes = getInstagramScopes();
   const profileGroup = getProfileGroup(req.nextUrl.searchParams.get("profile"));
 
   if (!clientId || !redirectUri) {
