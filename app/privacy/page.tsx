@@ -16,24 +16,27 @@ export default function PrivacyPage() {
 
         <p className="text-slate-300">
           Social Media Dashboard helps authorized users connect social media accounts, view profile
-          information, and display recent public content from connected platforms.
+          information, view live account statistics, and display recent public content from
+          connected platforms.
         </p>
 
         <section className="space-y-2">
           <h2 className="text-xl font-medium">Information We Collect</h2>
           <p className="text-slate-300">
-            When you connect TikTok, we request access to basic profile information such as open ID,
-            avatar, and display name. If you grant video access, we may also retrieve public video
-            metadata such as video ID, title, description, cover image URL, share URL, embed link,
-            duration, cursor, and pagination status.
+            When you connect Instagram, Facebook, LinkedIn, or TikTok, we request only the
+            permissions shown during authorization. Depending on the platform, this may include
+            basic profile information, account identifiers, display name, username, avatar or profile
+            picture, follower counts, following counts, media counts, page names, and public content
+            metadata that you explicitly authorize.
           </p>
         </section>
 
         <section className="space-y-2">
           <h2 className="text-xl font-medium">How We Use Information</h2>
           <p className="text-slate-300">
-            We use connected account data to show social profile information and recent public video
-            metadata inside the dashboard. We do not sell connected account data.
+            We use connected account data to show social profile information, live account
+            statistics, and authorized public content metadata inside the dashboard. We do not sell
+            connected account data.
           </p>
         </section>
 
@@ -42,7 +45,15 @@ export default function PrivacyPage() {
           <p className="text-slate-300">
             Access tokens and refresh tokens are used only to communicate with the platform APIs you
             authorize. Tokens are handled server-side and should be revoked by disconnecting access in
-            your TikTok account settings or by contacting the app operator.
+            the connected platform&apos;s account settings or by contacting the app operator.
+          </p>
+        </section>
+
+        <section className="space-y-2">
+          <h2 className="text-xl font-medium">Data Deletion</h2>
+          <p className="text-slate-300">
+            You can request deletion of connected account data by following the instructions at
+            https://socialmedia-dashboard-phi.vercel.app/data-deletion.
           </p>
         </section>
 

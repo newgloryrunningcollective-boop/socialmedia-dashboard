@@ -30,9 +30,9 @@ export default function TermsPage() {
         <section className="space-y-2">
           <h2 className="text-xl font-medium">Connected Platforms</h2>
           <p className="text-slate-300">
-            When you connect a platform such as TikTok, you grant the service permission to request
-            the scopes shown during authorization. You may revoke access through the connected
-            platform&apos;s account settings.
+            When you connect a platform such as Instagram, Facebook, LinkedIn, or TikTok, you grant
+            the service permission to request the scopes shown during authorization. You may revoke
+            access through the connected platform&apos;s account settings.
           </p>
         </section>
 

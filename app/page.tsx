@@ -314,6 +314,9 @@ export default function DashboardPage({ searchParams }: { searchParams: Dashboar
             <a href="/terms" className="underline hover:text-white">
               Terms of Service
             </a>
+            <a href="/data-deletion" className="underline hover:text-white">
+              Data Deletion
+            </a>
           </div>
         </header>
 
