@@ -857,12 +857,23 @@ export async function GET() {
       const contentMessages = [
         ownedMediaResult.ok ? null : ownedMediaResult.message,
       ].filter(Boolean);
+      const metaContributorFetchFailed =
+        Boolean(metaPage) && !metaTaggedMediaResult.ok && !metaMentionedMediaResult.ok;
+      const contributorMessages = Array.from(
+        new Set(
+          [metaTaggedMediaResult.message, metaMentionedMediaResult.message]
+            .filter((message): message is string => Boolean(message))
+        )
+      );
       const contributorMessage =
         collaboratorMedia > 0
           ? null
-          : metaPage
-            ? "No contributor posts were returned for this account yet. If a collaboration is missing, confirm the managing Page has tagged-media access for this Instagram account."
-            : "Contributor posts need the Page that manages this Instagram account to be connected.";
+          : !metaPage
+            ? "Contributor posts need the Page that manages this Instagram account to be connected."
+            : metaContributorFetchFailed
+              ? contributorMessages.join(" ") ||
+                "Contributor posts need tagged-media access for this Instagram account."
+              : null;
 
       return {
         cookieProfile: toStoredProfile(refreshedProfile),
