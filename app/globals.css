@@ -24,3 +24,39 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+.privacy-sensitive,
+.privacy-sensitive-chart {
+  transition: color 180ms ease, filter 180ms ease, opacity 180ms ease;
+}
+
+.privacy-sensitive {
+  position: relative;
+}
+
+.showcase-locked .privacy-sensitive {
+  color: transparent !important;
+  pointer-events: none;
+  text-shadow: none;
+  user-select: none;
+}
+
+.showcase-locked .privacy-sensitive::after {
+  content: "";
+  position: absolute;
+  inset: 18% 0;
+  min-width: 2.5rem;
+  border: 1px solid rgba(251, 191, 36, 0.24);
+  border-radius: 999px;
+  background:
+    linear-gradient(90deg, rgba(251, 191, 36, 0.2), rgba(148, 163, 184, 0.26)),
+    rgba(15, 23, 42, 0.86);
+  box-shadow: 0 0 18px rgba(251, 191, 36, 0.12);
+}
+
+.showcase-locked .privacy-sensitive-chart {
+  filter: blur(8px);
+  opacity: 0.42;
+  pointer-events: none;
+  user-select: none;
+}

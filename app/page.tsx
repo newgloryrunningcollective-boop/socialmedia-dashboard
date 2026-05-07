@@ -464,6 +464,51 @@ function formatPercent(value: number | null | undefined) {
   }).format(normalized);
 }
 
+const nonSensitiveMetricLabels = new Set([
+  "live data status",
+  "open id",
+  "profile id",
+  "type",
+]);
+
+function isSensitiveMetricLabel(label: string) {
+  return !nonSensitiveMetricLabels.has(label.toLowerCase());
+}
+
+function SensitiveMetricValue({
+  label,
+  children,
+  className = "",
+}: {
+  label: string;
+  children: ReactNode;
+  className?: string;
+}) {
+  const sensitiveClass = isSensitiveMetricLabel(label)
+    ? "privacy-sensitive inline-block min-w-8"
+    : "";
+
+  return (
+    <span className={[sensitiveClass, className].filter(Boolean).join(" ")}>
+      {children}
+    </span>
+  );
+}
+
+function PrivacySensitive({
+  children,
+  className = "",
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <span className={["privacy-sensitive inline-block min-w-8", className].filter(Boolean).join(" ")}>
+      {children}
+    </span>
+  );
+}
+
 function formatDate(value: string | null | undefined) {
   if (!value) return "n/a";
   return new Intl.DateTimeFormat("en", {
@@ -861,13 +906,14 @@ const initialPlan: CalendarItem[] = [
 export default function DashboardPage({ searchParams }: { searchParams: DashboardSearchParams }) {
   const connectionSummary = parseConnectionSummary(use(searchParams));
   const [activeTab, setActiveTab] = useState<Tab>("Home");
+  const [showcaseLocked, setShowcaseLocked] = useState(false);
   const [plannerState, setPlannerState] = useState<PlannerState>({
     tasks: initialTasks,
     items: initialPlan,
   });
 
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_top_right,#312e81_0%,#0b1020_35%,#070b16_70%)] p-6 text-slate-100">
+    <main className={`min-h-screen bg-[radial-gradient(circle_at_top_right,#312e81_0%,#0b1020_35%,#070b16_70%)] p-6 text-slate-100 ${showcaseLocked ? "showcase-locked" : ""}`}>
       <div className="mx-auto max-w-7xl">
         <header className="mb-6 rounded-2xl border border-white/10 bg-white/5 p-6 shadow-2xl backdrop-blur-xl">
           <h1 className="text-3xl font-semibold tracking-tight">Social Analytics Suite</h1>
@@ -885,7 +931,7 @@ export default function DashboardPage({ searchParams }: { searchParams: Dashboar
           </div>
         </header>
 
-        <nav className="mb-6 flex gap-2 rounded-xl border border-white/10 bg-white/5 p-2 backdrop-blur">
+        <nav className="mb-6 flex flex-wrap items-center gap-2 rounded-xl border border-white/10 bg-white/5 p-2 backdrop-blur">
           {tabs.map((tab) => (
             <button
               key={tab}
@@ -897,6 +943,20 @@ export default function DashboardPage({ searchParams }: { searchParams: Dashboar
               {tab}
             </button>
           ))}
+          <button
+            type="button"
+            aria-pressed={showcaseLocked}
+            aria-label={showcaseLocked ? "Unlock dashboard numbers" : "Lock dashboard numbers"}
+            title={showcaseLocked ? "Show metrics" : "Lock metrics for showcase"}
+            onClick={() => setShowcaseLocked((locked) => !locked)}
+            className={`ml-auto flex h-10 w-10 items-center justify-center rounded-lg border transition-all duration-300 hover:-translate-y-0.5 ${
+              showcaseLocked
+                ? "border-amber-200/40 bg-amber-300/15 text-amber-100 shadow-lg shadow-amber-950/20"
+                : "border-white/10 bg-black/20 text-slate-300 hover:bg-white/10 hover:text-white"
+            }`}
+          >
+            <PrivacyLockIcon locked={showcaseLocked} />
+          </button>
         </nav>
 
         {activeTab === "Home" && (
@@ -914,6 +974,26 @@ export default function DashboardPage({ searchParams }: { searchParams: Dashboar
         {activeTab === "WhatsApp" && <WhatsAppTab />}
       </div>
     </main>
+  );
+}
+
+function PrivacyLockIcon({ locked }: { locked: boolean }) {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      className="h-5 w-5"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.8"
+    >
+      <rect x="5" y="10" width="14" height="10" rx="2.5" />
+      <path d={locked ? "M8 10V7a4 4 0 0 1 8 0v3" : "M8 10V7a4 4 0 0 1 7.2-2.4"} />
+      {!locked && <path d="M15.2 4.6 18 7.1" />}
+      <path d="M12 14v2" />
+    </svg>
   );
 }
 
@@ -1002,7 +1082,9 @@ function HomeTab({
         {kpis.map((kpi) => (
           <PremiumCard key={kpi.label}>
             <p className="text-sm text-slate-300">{kpi.label}</p>
-            <p className="mt-3 text-2xl font-semibold">{kpi.value}</p>
+            <p className="mt-3 text-2xl font-semibold">
+              <SensitiveMetricValue label={kpi.label}>{kpi.value}</SensitiveMetricValue>
+            </p>
           </PremiumCard>
         ))}
       </div>
@@ -1457,11 +1539,15 @@ function InstagramPostPreview({
           </p>
         )}
         <p className="text-slate-300">
-          {formatCompactStat(getPostViews(media))} views · {formatCompactStat(getPostEngagement(media))} interactions
+          <PrivacySensitive>
+            {formatCompactStat(getPostViews(media))} views · {formatCompactStat(getPostEngagement(media))} interactions
+          </PrivacySensitive>
         </p>
         {!compact && (
           <p className="text-slate-400">
-            {formatCompactStat(media.likeCount)} likes · {formatCompactStat(media.commentsCount)} comments · {formatCompactStat(media.insightShares)} shares
+            <PrivacySensitive>
+              {formatCompactStat(media.likeCount)} likes · {formatCompactStat(media.commentsCount)} comments · {formatCompactStat(media.insightShares)} shares
+            </PrivacySensitive>
           </p>
         )}
       </div>
@@ -1550,7 +1636,9 @@ function InstagramDraftPreview({
           <div>
             <p className="font-medium">{profile?.name ?? profile?.username ?? "Profile preview"}</p>
             <p className="text-xs text-slate-400">
-              {formatCompactStat(profile?.followersCount)} followers · {formatCompactStat(profile?.mediaCount)} posts
+              <PrivacySensitive>
+                {formatCompactStat(profile?.followersCount)} followers · {formatCompactStat(profile?.mediaCount)} posts
+              </PrivacySensitive>
             </p>
           </div>
         </div>
@@ -1627,9 +1715,11 @@ function ExternalPostPreview({
         <p className="line-clamp-2 text-slate-200">{post.message ?? `${platform} post`}</p>
         <p className="text-slate-400">{formatDate(post.createdTime)}</p>
         <p className="text-slate-300">
-          {formatCompactStat(post.engagementCount)} interactions
+          <PrivacySensitive>{formatCompactStat(post.engagementCount)} interactions</PrivacySensitive>
         </p>
-        <p className="text-slate-400">{secondaryLine}</p>
+        <p className="text-slate-400">
+          <PrivacySensitive>{secondaryLine}</PrivacySensitive>
+        </p>
       </div>
     </div>
   );
@@ -1697,7 +1787,9 @@ function AccountStatCard({
         {stats.map(([label, value]) => (
           <div key={label} className="rounded-md bg-white/5 p-2">
             <dt className="text-xs text-slate-400">{label}</dt>
-            <dd className="mt-1 break-words text-slate-100">{value}</dd>
+            <dd className="mt-1 break-words text-slate-100">
+              <SensitiveMetricValue label={label}>{value}</SensitiveMetricValue>
+            </dd>
           </div>
         ))}
       </dl>
@@ -2269,7 +2361,9 @@ function StatisticsTab() {
         ].map(([label, value]) => (
           <PremiumCard key={label}>
             <p className="text-sm text-slate-300">{label}</p>
-            <p className="mt-3 text-2xl font-semibold">{value}</p>
+            <p className="mt-3 text-2xl font-semibold">
+              <SensitiveMetricValue label={label}>{value}</SensitiveMetricValue>
+            </p>
           </PremiumCard>
         ))}
       </div>
@@ -2303,7 +2397,9 @@ function StatisticsTab() {
         ].map((item) => (
           <PremiumCard key={item.label}>
             <p className="text-sm text-slate-300">{item.label}</p>
-            <p className="mt-3 text-xl font-semibold">{item.value}</p>
+            <p className="mt-3 text-xl font-semibold">
+              <SensitiveMetricValue label={item.label}>{item.value}</SensitiveMetricValue>
+            </p>
           </PremiumCard>
         ))}
       </div>
@@ -2332,7 +2428,9 @@ function StatisticsTab() {
             ].map(([label, value]) => (
               <div key={label} className="rounded-md bg-white/5 p-2">
                 <dt className="text-xs text-slate-400">{label}</dt>
-                <dd>{value}</dd>
+                <dd>
+                  <SensitiveMetricValue label={label}>{value}</SensitiveMetricValue>
+                </dd>
               </div>
             ))}
           </dl>
@@ -2367,7 +2465,9 @@ function StatisticsTab() {
             ].map(([label, value]) => (
               <div key={label} className="rounded-md bg-white/5 p-2">
                 <dt className="text-xs text-slate-400">{label}</dt>
-                <dd>{value}</dd>
+                <dd>
+                  <SensitiveMetricValue label={label}>{value}</SensitiveMetricValue>
+                </dd>
               </div>
             ))}
           </dl>
@@ -2399,7 +2499,9 @@ function StatisticsTab() {
             ].map(([label, value]) => (
               <div key={label} className="rounded-md bg-white/5 p-2">
                 <dt className="text-xs text-slate-400">{label}</dt>
-                <dd>{value}</dd>
+                <dd>
+                  <SensitiveMetricValue label={label}>{value}</SensitiveMetricValue>
+                </dd>
               </div>
             ))}
           </dl>
@@ -2431,7 +2533,9 @@ function StatisticsTab() {
             ].map(([label, value]) => (
               <div key={label} className="rounded-md bg-white/5 p-2">
                 <dt className="text-xs text-slate-400">{label}</dt>
-                <dd>{value}</dd>
+                <dd>
+                  <SensitiveMetricValue label={label}>{value}</SensitiveMetricValue>
+                </dd>
               </div>
             ))}
           </dl>
@@ -2460,7 +2564,7 @@ function StatisticsTab() {
           </span>
         </div>
         {activityChartData.length ? (
-          <div className="h-72">
+          <div className="privacy-sensitive-chart h-72">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={activityChartData}>
                 <CartesianGrid stroke="rgba(255,255,255,0.08)" vertical={false} />
@@ -2495,12 +2599,12 @@ function StatisticsTab() {
           <div className="mb-4 flex items-center justify-between gap-3">
             <h2 className="text-lg font-medium">Instagram Account Comparison</h2>
             <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-slate-300">
-              {instagramProfiles.length} accounts
+              <PrivacySensitive>{instagramProfiles.length} accounts</PrivacySensitive>
             </span>
           </div>
 
           {chartData.length ? (
-            <div className="h-80">
+            <div className="privacy-sensitive-chart h-80">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={chartData}>
                   <CartesianGrid stroke="rgba(255,255,255,0.08)" vertical={false} />
@@ -2549,39 +2653,57 @@ function StatisticsTab() {
                   <dl className="mt-3 grid grid-cols-2 gap-2 text-sm">
                     <div className="rounded-md bg-white/5 p-2">
                       <dt className="text-xs text-slate-400">Followers</dt>
-                      <dd>{formatCompactStat(profile.followersCount)}</dd>
+                      <dd>
+                        <SensitiveMetricValue label="Followers">{formatCompactStat(profile.followersCount)}</SensitiveMetricValue>
+                      </dd>
                     </div>
                     <div className="rounded-md bg-white/5 p-2">
                       <dt className="text-xs text-slate-400">Following</dt>
-                      <dd>{formatCompactStat(profile.followsCount)}</dd>
+                      <dd>
+                        <SensitiveMetricValue label="Following">{formatCompactStat(profile.followsCount)}</SensitiveMetricValue>
+                      </dd>
                     </div>
                     <div className="rounded-md bg-white/5 p-2">
                       <dt className="text-xs text-slate-400">Media</dt>
-                      <dd>{formatCompactStat(profile.mediaCount)}</dd>
+                      <dd>
+                        <SensitiveMetricValue label="Media">{formatCompactStat(profile.mediaCount)}</SensitiveMetricValue>
+                      </dd>
                     </div>
                     <div className="rounded-md bg-white/5 p-2">
                       <dt className="text-xs text-slate-400">Views</dt>
-                      <dd>{formatCompactStat(profile.insights?.views)}</dd>
+                      <dd>
+                        <SensitiveMetricValue label="Views">{formatCompactStat(profile.insights?.views)}</SensitiveMetricValue>
+                      </dd>
                     </div>
                     <div className="rounded-md bg-white/5 p-2">
                       <dt className="text-xs text-slate-400">Interactions</dt>
-                      <dd>{formatCompactStat(profile.insights?.interactions)}</dd>
+                      <dd>
+                        <SensitiveMetricValue label="Interactions">{formatCompactStat(profile.insights?.interactions)}</SensitiveMetricValue>
+                      </dd>
                     </div>
                     <div className="rounded-md bg-white/5 p-2">
                       <dt className="text-xs text-slate-400">New followers</dt>
-                      <dd>{formatCompactStat(profile.insights?.follows)}</dd>
+                      <dd>
+                        <SensitiveMetricValue label="New followers">{formatCompactStat(profile.insights?.follows)}</SensitiveMetricValue>
+                      </dd>
                     </div>
                     <div className="rounded-md bg-white/5 p-2">
                       <dt className="text-xs text-slate-400">Shared</dt>
-                      <dd>{formatCompactStat(profile.contentSummary?.contentShared)}</dd>
+                      <dd>
+                        <SensitiveMetricValue label="Shared">{formatCompactStat(profile.contentSummary?.contentShared)}</SensitiveMetricValue>
+                      </dd>
                     </div>
                     <div className="rounded-md bg-white/5 p-2">
                       <dt className="text-xs text-slate-400">Stories</dt>
-                      <dd>{formatCompactStat(profile.contentSummary?.activeStories)}</dd>
+                      <dd>
+                        <SensitiveMetricValue label="Stories">{formatCompactStat(profile.contentSummary?.activeStories)}</SensitiveMetricValue>
+                      </dd>
                     </div>
                     <div className="rounded-md bg-white/5 p-2">
                       <dt className="text-xs text-slate-400">Contributor</dt>
-                      <dd>{formatCompactStat(profile.contentSummary?.collaboratorMedia)}</dd>
+                      <dd>
+                        <SensitiveMetricValue label="Contributor">{formatCompactStat(profile.contentSummary?.collaboratorMedia)}</SensitiveMetricValue>
+                      </dd>
                     </div>
                   </dl>
                   {profile.insightsMessage && (
@@ -2600,7 +2722,7 @@ function StatisticsTab() {
         <div className="mb-4 flex items-center justify-between gap-3">
           <h2 className="text-lg font-medium">Latest Instagram Post Performance</h2>
           <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-slate-300">
-            {posts.length} posts
+            <PrivacySensitive>{posts.length} posts</PrivacySensitive>
           </span>
         </div>
 
@@ -2622,19 +2744,29 @@ function StatisticsTab() {
                 <dl className="mt-3 grid grid-cols-2 gap-2 text-sm">
                   <div className="rounded-md bg-white/5 p-2">
                     <dt className="text-xs text-slate-400">Views</dt>
-                    <dd>{formatCompactStat(getPostViews(post))}</dd>
+                    <dd>
+                      <SensitiveMetricValue label="Views">{formatCompactStat(getPostViews(post))}</SensitiveMetricValue>
+                    </dd>
                   </div>
                   <div className="rounded-md bg-white/5 p-2">
                     <dt className="text-xs text-slate-400">Interactions</dt>
-                    <dd>{formatCompactStat(getPostEngagement(post))}</dd>
+                    <dd>
+                      <SensitiveMetricValue label="Interactions">{formatCompactStat(getPostEngagement(post))}</SensitiveMetricValue>
+                    </dd>
                   </div>
                   <div className="rounded-md bg-white/5 p-2">
                     <dt className="text-xs text-slate-400">Reach</dt>
-                    <dd>{formatCompactStat(post.insightReach)}</dd>
+                    <dd>
+                      <SensitiveMetricValue label="Reach">{formatCompactStat(post.insightReach)}</SensitiveMetricValue>
+                    </dd>
                   </div>
                   <div className="rounded-md bg-white/5 p-2">
                     <dt className="text-xs text-slate-400">Saves + shares</dt>
-                    <dd>{formatCompactStat((post.insightSaves ?? 0) + (post.insightShares ?? 0))}</dd>
+                    <dd>
+                      <SensitiveMetricValue label="Saves + shares">
+                        {formatCompactStat((post.insightSaves ?? 0) + (post.insightShares ?? 0))}
+                      </SensitiveMetricValue>
+                    </dd>
                   </div>
                 </dl>
               </div>
@@ -2651,7 +2783,7 @@ function StatisticsTab() {
         <div className="mb-4 flex items-center justify-between gap-3">
           <h2 className="text-lg font-medium">Active Instagram Stories</h2>
           <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-slate-300">
-            {storyPosts.length} stories
+            <PrivacySensitive>{storyPosts.length} stories</PrivacySensitive>
           </span>
         </div>
 
@@ -2684,7 +2816,7 @@ function StatisticsTab() {
         <div className="mb-4 flex items-center justify-between gap-3">
           <h2 className="text-lg font-medium">Contributor Content</h2>
           <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-slate-300">
-            {contributorPosts.length} items
+            <PrivacySensitive>{contributorPosts.length} items</PrivacySensitive>
           </span>
         </div>
 
@@ -2774,7 +2906,7 @@ function InstagramTab() {
         <div className="mb-4 flex items-center justify-between gap-3">
           <h2 className="text-lg font-medium">Latest Instagram Activity</h2>
           <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-slate-300">
-            {contentItems.length} items
+            <PrivacySensitive>{contentItems.length} items</PrivacySensitive>
           </span>
         </div>
         {contentItems.length ? (
