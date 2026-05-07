@@ -4,35 +4,27 @@ const INSTAGRAM_OAUTH_STATE_COOKIE = "instagram_oauth_state";
 const INSTAGRAM_OAUTH_PROFILE_COOKIE = "instagram_oauth_profile";
 const TEN_MINUTES = 60 * 10;
 const REQUIRED_INSTAGRAM_SCOPES = [
-  "instagram_basic",
-  "instagram_manage_insights",
-  "instagram_manage_comments",
-  "instagram_manage_messages",
-  "instagram_content_publish",
-  "instagram_manage_upcoming_events",
-  "instagram_shopping_tag_products",
-  "instagram_branded_content_brand",
-  "instagram_branded_content_ads_brand",
-  "instagram_public_content_access",
-  "pages_show_list",
-  "pages_read_engagement",
-  "pages_manage_posts",
-  "pages_manage_engagement",
-  "pages_read_user_content",
-  "business_management",
-  "business_asset_user_profile_access",
-  "ads_read",
-  "ads_management",
-  "catalog_management",
-  "human_agent",
-  "public_profile",
-  "email",
   "instagram_business_basic",
   "instagram_business_manage_insights",
   "instagram_business_manage_comments",
-  "instagram_business_manage_messages",
   "instagram_business_content_publish",
 ];
+const ALLOWED_INSTAGRAM_LOGIN_SCOPES = new Set([
+  ...REQUIRED_INSTAGRAM_SCOPES,
+  "instagram_business_manage_messages",
+]);
+const LEGACY_INSTAGRAM_SCOPE_ALIASES: Record<string, string> = {
+  business_basic: "instagram_business_basic",
+  business_manage_insights: "instagram_business_manage_insights",
+  business_manage_comments: "instagram_business_manage_comments",
+  business_manage_messages: "instagram_business_manage_messages",
+  business_content_publish: "instagram_business_content_publish",
+  instagram_basic: "instagram_business_basic",
+  instagram_manage_insights: "instagram_business_manage_insights",
+  instagram_manage_comments: "instagram_business_manage_comments",
+  instagram_manage_messages: "instagram_business_manage_messages",
+  instagram_content_publish: "instagram_business_content_publish",
+};
 const profileGroups = ["personal", "newglory"] as const;
 
 type InstagramProfileGroup = (typeof profileGroups)[number];
@@ -50,7 +42,11 @@ function getInstagramRedirectUri() {
 
 function getInstagramScopes() {
   const configuredScopes =
-    process.env.INSTAGRAM_SCOPES?.split(/[,\s]+/).map((scope) => scope.trim()).filter(Boolean) ??
+    process.env.INSTAGRAM_SCOPES?.split(/[,\s]+/)
+      .map((scope) => scope.trim())
+      .filter(Boolean)
+      .map((scope) => LEGACY_INSTAGRAM_SCOPE_ALIASES[scope] ?? scope)
+      .filter((scope) => ALLOWED_INSTAGRAM_LOGIN_SCOPES.has(scope)) ??
     [];
 
   return Array.from(new Set([...configuredScopes, ...REQUIRED_INSTAGRAM_SCOPES])).join(",");
