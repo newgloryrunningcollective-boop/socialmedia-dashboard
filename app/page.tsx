@@ -176,6 +176,10 @@ type InstagramMediaMetric = {
   collaborators: InstagramCollaboratorMetric[];
 };
 
+type InstagramContentWithProfile = InstagramMediaMetric & {
+  profile: InstagramProfileMetric;
+};
+
 type InstagramMetricsResponse = {
   ok: boolean;
   message?: string;
@@ -350,7 +354,6 @@ const PLANNER_STORAGE_KEY = "socialmedia-dashboard-planner-v2";
 const connectedProfiles = {
   personal: {
     instagram: "@thijs.wijma",
-    facebook: "Personal Facebook Page",
     linkedin: "https://www.linkedin.com/in/thijs-w-74b309192",
     threads: "Personal Threads",
     tiktok: "Personal TikTok",
@@ -372,6 +375,9 @@ const initialLiveMetrics: LiveMetricsState = {
   whatsapp: null,
   loading: true,
 };
+const LIVE_METRICS_CACHE_TTL = 45_000;
+let liveMetricsCache: LiveMetricsState | null = null;
+let liveMetricsCacheAt = 0;
 
 function firstParam(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
@@ -588,11 +594,85 @@ function sumProfileInsights(
   return profiles.reduce((sum, profile) => sum + (profile.insights?.[field] ?? 0), 0);
 }
 
-function sumProfileContent(profiles: InstagramProfileMetric[]) {
-  return profiles.reduce(
-    (sum, profile) => sum + (profile.contentSummary?.contentShared ?? 0),
-    0
-  );
+function getRangeStart(range: Range) {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+
+  if (range === "Day") return start;
+  if (range === "Week") start.setDate(start.getDate() - 6);
+  if (range === "Month") start.setDate(start.getDate() - 29);
+  if (range === "Year") start.setDate(start.getDate() - 364);
+  return start;
+}
+
+function isInRange(timestamp: string | null, range: Range) {
+  if (!timestamp) return false;
+  const time = new Date(timestamp).getTime();
+  return Number.isFinite(time) && time >= getRangeStart(range).getTime() && time <= Date.now();
+}
+
+function getRangeWindowLabel(range: Range) {
+  if (range === "Day") return "Today";
+  if (range === "Week") return "Last 7 days";
+  if (range === "Month") return "Last 30 days";
+  return "Last 365 days";
+}
+
+function getActivityBucketLabel(timestamp: string | null, range: Range) {
+  if (!timestamp) return "Unknown";
+  const date = new Date(timestamp);
+  if (range === "Day") {
+    return `${String(date.getHours()).padStart(2, "0")}:00`;
+  }
+  if (range === "Year") {
+    return date.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
+  }
+  return date.toLocaleDateString("en-US", { day: "2-digit", month: "short" });
+}
+
+function buildActivityBuckets(items: InstagramContentWithProfile[], range: Range) {
+  const buckets = new Map<
+    string,
+    {
+      name: string;
+      Posts: number;
+      Stories: number;
+      Contributor: number;
+      Views: number;
+      Interactions: number;
+    }
+  >();
+
+  items.forEach((item) => {
+    const name = getActivityBucketLabel(item.timestamp, range);
+    const current =
+      buckets.get(name) ??
+      {
+        name,
+        Posts: 0,
+        Stories: 0,
+        Contributor: 0,
+        Views: 0,
+        Interactions: 0,
+      };
+
+    if (item.sourceType === "story") current.Stories += 1;
+    else if (item.sourceType === "collaborator" || item.sourceType === "tagged") current.Contributor += 1;
+    else current.Posts += 1;
+
+    current.Views += getPostViews(item) ?? 0;
+    current.Interactions += getPostEngagement(item);
+    buckets.set(name, current);
+  });
+
+  return Array.from(buckets.values());
+}
+
+function pickPeak<T>(items: T[], readValue: (item: T) => number) {
+  return items.reduce<T | null>((best, item) => {
+    if (!best) return item;
+    return readValue(item) > readValue(best) ? item : best;
+  }, null);
 }
 
 async function fetchJson<T>(path: string): Promise<T> {
@@ -663,47 +743,75 @@ async function uploadWhatsAppMedia(file: File) {
 }
 
 function useLiveMetrics(): LiveMetricsState {
-  const [metrics, setMetrics] = useState<LiveMetricsState>(initialLiveMetrics);
+  const [metrics, setMetrics] = useState<LiveMetricsState>(() => liveMetricsCache ?? initialLiveMetrics);
 
   useEffect(() => {
     let cancelled = false;
+    const bypassCache =
+      typeof window !== "undefined" &&
+      /(?:meta|instagram|threads|linkedin|tiktok)_connected=1/.test(window.location.search);
+    if (liveMetricsCache && !bypassCache && Date.now() - liveMetricsCacheAt < LIVE_METRICS_CACHE_TTL) {
+      return () => {
+        cancelled = true;
+      };
+    }
 
-    async function loadMetrics() {
-      const [meta, instagram, linkedin, threads, tiktok, whatsapp] = await Promise.all([
+    const loaders = {
+      meta: () =>
         fetchJson<MetaMetricsResponse>("/api/meta/metrics").catch((error: Error) => ({
           ok: false,
           message: error.message,
         })),
+      instagram: () =>
         fetchJson<InstagramMetricsResponse>("/api/instagram/metrics").catch((error: Error) => ({
           ok: false,
           message: error.message,
         })),
+      linkedin: () =>
         fetchJson<LinkedInMetricsResponse>("/api/linkedin/metrics").catch((error: Error) => ({
           ok: false,
           message: error.message,
         })),
+      threads: () =>
         fetchJson<ThreadsMetricsResponse>("/api/threads/metrics").catch((error: Error) => ({
           ok: false,
           message: error.message,
         })),
+      tiktok: () =>
         fetchJson<TikTokMetricsResponse>("/api/tiktok/metrics").catch((error: Error) => ({
           ok: false,
           message: error.message,
         })),
+      whatsapp: () =>
         fetchJson<WhatsAppMetricsResponse>("/api/whatsapp/messages").catch((error: Error) => ({
           ok: false,
           configured: false,
           messages: [],
           message: error.message,
         })),
-      ]);
+    };
+    type LoaderKey = keyof typeof loaders;
+    const keys = Object.keys(loaders) as LoaderKey[];
+    let remaining = keys.length;
+    let partial: LiveMetricsState = {
+      ...(liveMetricsCache ?? initialLiveMetrics),
+      loading: true,
+    };
 
-      if (!cancelled) {
-        setMetrics({ meta, instagram, linkedin, threads, tiktok, whatsapp, loading: false });
-      }
-    }
-
-    void loadMetrics();
+    keys.forEach((key) => {
+      void loaders[key]().then((value) => {
+        if (cancelled) return;
+        remaining -= 1;
+        partial = {
+          ...partial,
+          [key]: value,
+          loading: remaining > 0,
+        };
+        liveMetricsCache = partial;
+        liveMetricsCacheAt = Date.now();
+        setMetrics(partial);
+      });
+    });
 
     return () => {
       cancelled = true;
@@ -722,11 +830,6 @@ function findNewGloryMeta(metrics: MetaMetric[] | undefined) {
       igUsername === normalizeHandle(connectedProfiles.newGlory.instagram)
     );
   });
-}
-
-function findPersonalMeta(metrics: MetaMetric[] | undefined) {
-  const newGloryMeta = findNewGloryMeta(metrics);
-  return metrics?.find((item) => item.pageId !== newGloryMeta?.pageId);
 }
 
 function findInstagramProfile(
@@ -855,7 +958,6 @@ function HomeTab({
 }) {
   const liveMetrics = useLiveMetrics();
   const newGloryMeta = findNewGloryMeta(liveMetrics.meta?.metrics);
-  const personalMeta = findPersonalMeta(liveMetrics.meta?.metrics);
   const personalInstagram = findInstagramProfile(
     liveMetrics.instagram?.profiles,
     "personal"
@@ -870,10 +972,10 @@ function HomeTab({
   const threadsProfile = liveMetrics.threads?.profile;
   const tikTokUser = liveMetrics.tiktok?.profile?.data?.user;
   const instagramIsLive = Boolean(personalInstagram || newGloryInstagram);
+  const facebookIsLive = Boolean(newGloryMeta);
   const whatsappConnected = Boolean(liveMetrics.whatsapp?.configured);
   const totalKnownFollowers =
     (personalInstagram?.followersCount ?? 0) +
-    (personalMeta?.fbFollowersCount ?? personalMeta?.fbFanCount ?? 0) +
     (newGloryInstagram?.followersCount ?? newGloryMeta?.igFollowersCount ?? 0) +
     (newGloryMeta?.fbFollowersCount ?? newGloryMeta?.fbFanCount ?? 0) +
     (liveMetrics.linkedin?.identity?.personalProfile.followersCount ?? 0) +
@@ -881,7 +983,7 @@ function HomeTab({
     (liveMetrics.threads?.insights?.followersCount ?? 0);
   const connectedPlatformCount = [
     Boolean(personalInstagram || newGloryInstagram),
-    Boolean(personalMeta || newGloryMeta),
+    facebookIsLive,
     Boolean(liveMetrics.linkedin?.identity),
     Boolean(threadsProfile),
     Boolean(tikTokUser),
@@ -906,8 +1008,8 @@ function HomeTab({
       </div>
 
       <CompactConnectionPanel
-        metaConnected={metaConnected}
-        metaError={metaError}
+        metaConnected={metaConnected || facebookIsLive}
+        metaError={facebookIsLive ? null : metaError}
         connectedPages={connectedPages}
         instagramConnected={instagramConnected || instagramIsLive}
         instagramProfile={instagramProfile}
@@ -928,7 +1030,6 @@ function HomeTab({
         liveMetrics={liveMetrics}
         personalInstagram={personalInstagram}
         newGloryInstagram={newGloryInstagram}
-        personalMeta={personalMeta}
         newGloryMeta={newGloryMeta}
         linkedInOrganization={linkedInOrganization}
       />
@@ -994,7 +1095,11 @@ function CompactConnectionPanel({
       message: metaError,
       href: "/api/connect/meta",
       tab: "Facebook" as Tab,
-      detail: metaConnected ? `${connectedPages.length} page${connectedPages.length === 1 ? "" : "s"}` : "Connect",
+      detail: metaConnected
+        ? connectedPages.length
+          ? `${connectedPages.length} page${connectedPages.length === 1 ? "" : "s"}`
+          : "New Glory connected"
+        : "Connect",
     },
     {
       label: "LinkedIn",
@@ -1060,14 +1165,12 @@ function LiveAccountsPanel({
   liveMetrics,
   personalInstagram,
   newGloryInstagram,
-  personalMeta,
   newGloryMeta,
   linkedInOrganization,
 }: {
   liveMetrics: LiveMetricsState;
   personalInstagram: InstagramProfileMetric | undefined;
   newGloryInstagram: InstagramProfileMetric | undefined;
-  personalMeta: MetaMetric | undefined;
   newGloryMeta: MetaMetric | undefined;
   linkedInOrganization: LinkedInOrganizationMetric | undefined;
 }) {
@@ -1204,43 +1307,6 @@ function LiveAccountsPanel({
           externalPostsPlatform="Threads"
           postsMessage={liveMetrics.threads?.postsMessage}
           insightsMessage={liveMetrics.threads?.insightsMessage}
-        />
-
-        <AccountStatCard
-          group="Personal"
-          platform="Facebook"
-          account={personalMeta?.pageName ?? connectedProfiles.personal.facebook}
-          status={personalMeta ? "Live" : "Connect personal Facebook Page"}
-          stats={[
-            [
-              "Followers",
-              formatStat(
-                personalMeta?.fbFollowersCount ??
-                  personalMeta?.fbFollowerSnapshot
-              ),
-            ],
-            ["Fans", formatStat(personalMeta?.fbFanCount)],
-            ["Views", formatStat(personalMeta?.fbViews)],
-            ["Impressions", formatStat(personalMeta?.fbImpressions)],
-            ["Post engagements", formatStat(personalMeta?.fbPostEngagements)],
-            ["New followers", formatStat(personalMeta?.fbNewFollowers)],
-            ["Recent posts", formatStat(personalMeta?.fbRecentPostCount)],
-            [
-              "Recent post interactions",
-              formatStat(personalMeta?.fbRecentPostEngagements),
-            ],
-          ]}
-          externalPosts={personalMeta?.fbPosts}
-          externalPostsPlatform="Facebook"
-          actionHref={personalMeta ? undefined : "/api/connect/meta"}
-          actionLabel="Connect Meta"
-          postsMessage={personalMeta?.fbPostsMessage}
-          insightsMessage={
-            personalMeta?.fbInsightsMessage ??
-            (!personalMeta
-              ? "Meta only returns Facebook stats for Pages you manage. If this is a private Facebook profile, create or connect a personal/professional Page to show stats."
-              : null)
-          }
         />
 
         <AccountStatCard
@@ -2092,13 +2158,12 @@ function StatisticsTab() {
   const liveMetrics = useLiveMetrics();
   const instagramProfiles = liveMetrics.instagram?.profiles ?? [];
   const metaPages = liveMetrics.meta?.metrics ?? [];
-  const personalMeta = findPersonalMeta(metaPages);
   const newGloryMeta = findNewGloryMeta(metaPages);
   const linkedInProfile = liveMetrics.linkedin?.identity?.personalProfile;
   const linkedInOrganizations = liveMetrics.linkedin?.identity?.organizations ?? [];
   const linkedInOrganization = findLinkedInOrganization(linkedInOrganizations);
   const threadsProfile = liveMetrics.threads?.profile;
-  const contentItems = instagramProfiles
+  const contentItems: InstagramContentWithProfile[] = instagramProfiles
     .flatMap((profile) =>
       getProfileContent(profile).map((media) => ({
         ...media,
@@ -2110,9 +2175,10 @@ function StatisticsTab() {
       const bTime = b.timestamp ? new Date(b.timestamp).getTime() : 0;
       return bTime - aTime;
     });
-  const posts = contentItems.filter((post) => post.sourceType !== "story");
-  const storyPosts = contentItems.filter((post) => post.sourceType === "story");
-  const contributorPosts = contentItems.filter(
+  const filteredContentItems = contentItems.filter((item) => isInRange(item.timestamp, range));
+  const posts = filteredContentItems.filter((post) => post.sourceType !== "story");
+  const storyPosts = filteredContentItems.filter((post) => post.sourceType === "story");
+  const contributorPosts = filteredContentItems.filter(
     (post) => post.sourceType === "collaborator" || post.sourceType === "tagged"
   );
   const contributorMessages = Array.from(
@@ -2122,40 +2188,49 @@ function StatisticsTab() {
         .filter((message): message is string => Boolean(message))
     )
   );
-  const chartData = instagramProfiles.map((profile) => ({
-    name: getProfileLabel(profile),
-    Followers: profile.followersCount ?? 0,
-    Views: profile.insights?.views ?? 0,
-    Interactions: profile.insights?.interactions ?? 0,
-    Shared: profile.contentSummary?.contentShared ?? 0,
-  }));
+  const chartData = instagramProfiles.map((profile) => {
+    const profileItems = filteredContentItems.filter(
+      (item) => item.profile.profileGroup === profile.profileGroup
+    );
+    return {
+      name: getProfileLabel(profile),
+      Followers: profile.followersCount ?? 0,
+      Views: profileItems.reduce((sum, post) => sum + (getPostViews(post) ?? 0), 0),
+      Interactions: profileItems.reduce((sum, post) => sum + getPostEngagement(post), 0),
+      Shared: profileItems.length,
+    };
+  });
+  const activityChartData = buildActivityBuckets(filteredContentItems, range);
+  const peakActivity = pickPeak(
+    activityChartData,
+    (item) => item.Posts + item.Stories + item.Contributor
+  );
+  const peakInteractions = pickPeak(activityChartData, (item) => item.Interactions);
+  const topPost = pickPeak(posts, (post) => getPostViews(post) ?? getPostEngagement(post));
+  const topFollowerProfile = pickPeak(
+    instagramProfiles,
+    (profile) => profile.insights?.follows ?? 0
+  );
+  const topFollowerCount = topFollowerProfile?.insights?.follows ?? null;
   const totalFollowers = instagramProfiles.reduce(
     (sum, profile) => sum + (profile.followersCount ?? 0),
     0
   ) + (liveMetrics.threads?.insights?.followersCount ?? 0);
-  const insightViews = sumProfileInsights(instagramProfiles, "views");
   const postViews = posts.reduce(
     (sum, post) => sum + (getPostViews(post) ?? 0),
     0
   );
-  const insightInteractions = sumProfileInsights(instagramProfiles, "interactions");
   const postInteractions = posts.reduce(
     (sum, post) => sum + getPostEngagement(post),
     0
   );
-  const totalViews = insightViews || postViews;
-  const totalInteractions = insightInteractions || postInteractions;
+  const totalViews = postViews || (range === "Month" ? sumProfileInsights(instagramProfiles, "views") : 0);
+  const totalInteractions =
+    postInteractions || (range === "Month" ? sumProfileInsights(instagramProfiles, "interactions") : 0);
   const totalNewFollowers = sumProfileInsights(instagramProfiles, "follows");
-  const totalSharedContent = sumProfileContent(instagramProfiles) || contentItems.length;
-  const totalStories = instagramProfiles.reduce(
-    (sum, profile) => sum + (profile.contentSummary?.activeStories ?? 0),
-    0
-  );
-  const totalContributorContent =
-    instagramProfiles.reduce(
-      (sum, profile) => sum + (profile.contentSummary?.collaboratorMedia ?? 0),
-      0
-    ) || contributorPosts.length;
+  const totalSharedContent = filteredContentItems.length;
+  const totalStories = storyPosts.length;
+  const totalContributorContent = contributorPosts.length;
   const rangeLabel = formatRange(
     instagramProfiles[0]?.insights?.rangeStart ??
       instagramProfiles[0]?.contentSummary?.rangeStart,
@@ -2178,8 +2253,8 @@ function StatisticsTab() {
         </div>
         <p className="text-sm text-slate-300">
           {liveMetrics.loading
-            ? "Loading live Instagram statistics..."
-            : `${range} view · ${rangeLabel} · live Instagram snapshot`}
+            ? "Loading live statistics..."
+            : `${getRangeWindowLabel(range)} · content filtered by publish date · insights ${rangeLabel}`}
         </p>
       </PremiumCard>
 
@@ -2199,48 +2274,41 @@ function StatisticsTab() {
         ))}
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
-        <PremiumCard>
-          <div className="mb-4 flex items-center justify-between gap-3">
-            <h2 className="text-lg font-medium">Personal Facebook Statistics</h2>
-            <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-slate-300">
-              {personalMeta ? "Live" : "Connect personal Page"}
-            </span>
-          </div>
-          <dl className="grid grid-cols-2 gap-2 text-sm">
-            {[
-              [
-                "Followers",
-                formatStat(personalMeta?.fbFollowersCount ?? personalMeta?.fbFollowerSnapshot),
-              ],
-              ["Fans", formatStat(personalMeta?.fbFanCount)],
-              ["Views", formatStat(personalMeta?.fbViews)],
-              ["Impressions", formatStat(personalMeta?.fbImpressions)],
-              ["Engagements", formatStat(personalMeta?.fbPostEngagements)],
-              ["New followers", formatStat(personalMeta?.fbNewFollowers)],
-            ].map(([label, value]) => (
-              <div key={label} className="rounded-md bg-white/5 p-2">
-                <dt className="text-xs text-slate-400">{label}</dt>
-                <dd>{value}</dd>
-              </div>
-            ))}
-          </dl>
-          {personalMeta?.fbPosts?.length ? (
-            <div className="mt-4 grid gap-2 sm:grid-cols-3">
-              {personalMeta.fbPosts.slice(0, 3).map((post) => (
-                <ExternalPostPreview key={post.id} post={post} />
-              ))}
-            </div>
-          ) : (
-            <p className="mt-3 text-sm text-slate-300">
-              Connect a personal/professional Facebook Page through Meta to show personal Facebook stats.
-            </p>
-          )}
-          {personalMeta?.fbInsightsMessage && (
-            <p className="mt-3 text-xs text-amber-200">{personalMeta.fbInsightsMessage}</p>
-          )}
-        </PremiumCard>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {[
+          {
+            label: "Most posted",
+            value: peakActivity
+              ? `${peakActivity.name} · ${peakActivity.Posts + peakActivity.Stories + peakActivity.Contributor} items`
+              : "n/a",
+          },
+          {
+            label: "Most interactions",
+            value: peakInteractions
+              ? `${peakInteractions.name} · ${formatStat(peakInteractions.Interactions)}`
+              : "n/a",
+          },
+          {
+            label: "New follower lift",
+            value: topFollowerProfile && topFollowerCount !== null
+              ? `${getProfileLabel(topFollowerProfile)} · +${formatStat(topFollowerCount)}`
+              : "n/a",
+          },
+          {
+            label: "Top content",
+            value: topPost
+              ? `${getProfileLabel(topPost.profile)} · ${formatStat(getPostViews(topPost) ?? getPostEngagement(topPost))}`
+              : "n/a",
+          },
+        ].map((item) => (
+          <PremiumCard key={item.label}>
+            <p className="text-sm text-slate-300">{item.label}</p>
+            <p className="mt-3 text-xl font-semibold">{item.value}</p>
+          </PremiumCard>
+        ))}
+      </div>
 
+      <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
         <PremiumCard>
           <div className="mb-4 flex items-center justify-between gap-3">
             <h2 className="text-lg font-medium">New Glory Facebook Statistics</h2>
@@ -2383,6 +2451,44 @@ function StatisticsTab() {
           )}
         </PremiumCard>
       </div>
+
+      <PremiumCard>
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 className="text-lg font-medium">Activity Timeline</h2>
+          <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-slate-300">
+            {getRangeWindowLabel(range)}
+          </span>
+        </div>
+        {activityChartData.length ? (
+          <div className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={activityChartData}>
+                <CartesianGrid stroke="rgba(255,255,255,0.08)" vertical={false} />
+                <XAxis dataKey="name" stroke="#cbd5e1" tickLine={false} axisLine={false} />
+                <YAxis stroke="#cbd5e1" tickLine={false} axisLine={false} />
+                <Tooltip
+                  cursor={{ fill: "rgba(255,255,255,0.06)" }}
+                  contentStyle={{
+                    background: "#020617",
+                    border: "1px solid rgba(255,255,255,0.12)",
+                    borderRadius: 8,
+                    color: "#e2e8f0",
+                  }}
+                />
+                <Legend />
+                <Bar dataKey="Posts" fill="#818cf8" radius={[6, 6, 0, 0]} />
+                <Bar dataKey="Stories" fill="#22d3ee" radius={[6, 6, 0, 0]} />
+                <Bar dataKey="Contributor" fill="#f59e0b" radius={[6, 6, 0, 0]} />
+                <Bar dataKey="Interactions" fill="#34d399" radius={[6, 6, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        ) : (
+          <p className="text-sm text-slate-300">
+            No Instagram activity was returned for this selected range.
+          </p>
+        )}
+      </PremiumCard>
 
       <div className="grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
         <PremiumCard>
@@ -2744,7 +2850,8 @@ function ThreadsTab() {
 
 function FacebookTab() {
   const liveMetrics = useLiveMetrics();
-  const pages = liveMetrics.meta?.metrics ?? [];
+  const newGloryPage = findNewGloryMeta(liveMetrics.meta?.metrics);
+  const pages = newGloryPage ? [newGloryPage] : [];
 
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-5">
@@ -2753,7 +2860,7 @@ function FacebookTab() {
         {pages.map((page) => (
           <AccountStatCard
             key={page.pageId}
-            group={page.pageName.toLowerCase().includes("new glory") ? "New Glory" : "Personal"}
+            group="New Glory"
             platform="Facebook"
             account={page.pageName}
             status="Live"
