@@ -892,6 +892,58 @@ function findLinkedInOrganization(
   );
 }
 
+function hasNumberMetric(...values: Array<number | null | undefined>) {
+  return values.some((value) => typeof value === "number");
+}
+
+function hasLinkedInPersonalLiveData(
+  profile: NonNullable<LinkedInMetricsResponse["identity"]>["personalProfile"] | undefined
+) {
+  return Boolean(profile && hasNumberMetric(profile.followersCount, profile.connectionsCount));
+}
+
+function hasLinkedInOrganizationLiveData(
+  organization: LinkedInOrganizationMetric | undefined
+) {
+  return Boolean(
+    organization &&
+      hasNumberMetric(
+        organization.followersCount,
+        organization.organicFollowersCount,
+        organization.paidFollowersCount,
+        organization.impressions,
+        organization.clicks,
+        organization.likes,
+        organization.comments,
+        organization.shares,
+        organization.engagementRate
+      )
+  );
+}
+
+function hasThreadsLiveData(metrics: ThreadsMetricsResponse | null) {
+  return Boolean(
+    metrics?.profile &&
+      (hasNumberMetric(
+        metrics.insights?.followersCount,
+        metrics.insights?.views,
+        metrics.insights?.likes,
+        metrics.insights?.replies,
+        metrics.insights?.reposts,
+        metrics.insights?.quotes
+      ) ||
+        Boolean(metrics.posts?.length))
+  );
+}
+
+function hasTikTokLiveData(metrics: TikTokMetricsResponse | null) {
+  return Boolean(metrics?.profile?.data?.user && metrics.videos?.videos?.length);
+}
+
+function hasWhatsAppLiveData(metrics: WhatsAppMetricsResponse | null) {
+  return Boolean(metrics?.configured && metrics.messages?.length);
+}
+
 const initialTasks: Task[] = [
   { id: "t1", text: "Review weekly content pillars", priority: "High", done: false, source: "Manual" },
   { id: "t2", text: "Post running club update at peak hour", priority: "Medium", done: false, source: "Auto" },
@@ -1049,30 +1101,33 @@ function HomeTab({
   const linkedInOrganization = findLinkedInOrganization(
     liveMetrics.linkedin?.identity?.organizations
   );
-  const threadsProfile = liveMetrics.threads?.profile;
+  const linkedInProfile = liveMetrics.linkedin?.identity?.personalProfile;
   const tikTokUser = liveMetrics.tiktok?.profile?.data?.user;
   const instagramIsLive = Boolean(personalInstagram || newGloryInstagram);
   const facebookIsLive = Boolean(newGloryMeta);
-  const whatsappConnected = Boolean(liveMetrics.whatsapp?.configured);
+  const linkedInIsLive =
+    hasLinkedInPersonalLiveData(linkedInProfile) ||
+    hasLinkedInOrganizationLiveData(linkedInOrganization);
+  const threadsIsLive = hasThreadsLiveData(liveMetrics.threads);
+  const tikTokIsLive = hasTikTokLiveData(liveMetrics.tiktok);
+  const whatsAppIsLive = hasWhatsAppLiveData(liveMetrics.whatsapp);
   const totalKnownFollowers =
     (personalInstagram?.followersCount ?? 0) +
     (newGloryInstagram?.followersCount ?? newGloryMeta?.igFollowersCount ?? 0) +
     (newGloryMeta?.fbFollowersCount ?? newGloryMeta?.fbFanCount ?? 0) +
-    (liveMetrics.linkedin?.identity?.personalProfile.followersCount ?? 0) +
-    (linkedInOrganization?.followersCount ?? 0) +
     (liveMetrics.threads?.insights?.followersCount ?? 0);
   const connectedPlatformCount = [
     Boolean(personalInstagram || newGloryInstagram),
     facebookIsLive,
-    Boolean(liveMetrics.linkedin?.identity),
-    Boolean(threadsProfile),
-    Boolean(tikTokUser),
-    whatsappConnected,
+    threadsIsLive,
+    linkedInIsLive,
+    tikTokIsLive,
+    whatsAppIsLive,
   ].filter(Boolean).length;
 
   const kpis = [
     { label: "Known Live Followers", value: liveMetrics.loading ? "Loading..." : formatStat(totalKnownFollowers) },
-    { label: "Connected Sources", value: liveMetrics.loading ? "Loading..." : `${connectedPlatformCount}/6` },
+    { label: "Connected Sources", value: liveMetrics.loading ? "Loading..." : `${connectedPlatformCount} live` },
     { label: "Live Data Status", value: liveMetrics.loading ? "Loading..." : "Ready" },
   ];
 
@@ -1096,14 +1151,14 @@ function HomeTab({
         instagramConnected={instagramConnected || instagramIsLive}
         instagramProfile={instagramProfile}
         instagramError={instagramIsLive ? null : instagramError}
-        linkedInConnected={linkedInConnected}
+        linkedInConnected={linkedInConnected && linkedInIsLive}
         linkedInError={linkedInError}
         linkedInErrorMessage={linkedInErrorMessage}
-        threadsConnected={threadsConnected || Boolean(threadsProfile)}
+        threadsConnected={threadsConnected || threadsIsLive}
         threadsError={threadsError}
-        tikTokConnected={tikTokConnected || Boolean(tikTokUser)}
+        tikTokConnected={tikTokConnected || Boolean(tikTokUser && tikTokIsLive)}
         tikTokError={tikTokError}
-        whatsAppConnected={whatsappConnected}
+        whatsAppConnected={whatsAppIsLive}
         whatsAppMessage={liveMetrics.whatsapp?.message ?? null}
         onOpenTab={onOpenTab}
       />
@@ -1207,14 +1262,18 @@ function CompactConnectionPanel({
       tab: "WhatsApp" as Tab,
       detail: whatsAppConnected ? "Cloud API ready" : "Configure API",
     },
-  ].sort((a, b) => Number(b.connected) - Number(a.connected));
+  ]
+    .filter((item) => item.connected)
+    .sort((a, b) => Number(b.connected) - Number(a.connected));
+
+  if (!items.length) return null;
 
   return (
     <section className="rounded-xl border border-white/10 bg-white/5 p-3 backdrop-blur-xl">
       <div className="mb-2 flex items-center justify-between gap-3">
         <h2 className="text-sm font-medium text-slate-200">Connections</h2>
         <span className="text-xs text-slate-400">
-          {items.filter((item) => item.connected).length}/{items.length} live
+          {items.length} live
         </span>
       </div>
       <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-6">
@@ -1222,7 +1281,7 @@ function CompactConnectionPanel({
           <button
             key={item.label}
             type="button"
-            onClick={() => (item.connected || item.label === "WhatsApp" ? onOpenTab(item.tab) : window.location.assign(item.href))}
+            onClick={() => onOpenTab(item.tab)}
             className={`rounded-lg border px-3 py-2 text-sm transition hover:bg-white/10 ${
               item.connected
                 ? "border-emerald-300/20 bg-emerald-400/10"
@@ -1261,6 +1320,11 @@ function LiveAccountsPanel({
   const tikTokUser = liveMetrics.tiktok?.profile?.data?.user;
   const newGloryInstagramUsername =
     newGloryInstagram?.username ?? newGloryMeta?.igUsername ?? null;
+  const showNewGloryInstagram = Boolean(newGloryInstagram || newGloryMeta?.igBusinessId);
+  const showLinkedInPersonal = hasLinkedInPersonalLiveData(linkedInProfile);
+  const showLinkedInOrganization = hasLinkedInOrganizationLiveData(linkedInOrganization);
+  const showThreads = hasThreadsLiveData(liveMetrics.threads);
+  const showTikTok = hasTikTokLiveData(liveMetrics.tiktok);
 
   return (
     <PremiumCard>
@@ -1275,7 +1339,8 @@ function LiveAccountsPanel({
       </div>
 
       <div className="grid gap-3 lg:grid-cols-2">
-        <AccountStatCard
+        {personalInstagram && (
+          <AccountStatCard
           group="Personal"
           platform="Instagram"
           account={
@@ -1307,9 +1372,11 @@ function LiveAccountsPanel({
           postsMessage={personalInstagram?.mediaMessage}
           contributorMessage={personalInstagram?.contributorMessage}
           insightsMessage={personalInstagram?.insightsMessage}
-        />
+          />
+        )}
 
-        <AccountStatCard
+        {showNewGloryInstagram && (
+          <AccountStatCard
           group="New Glory"
           platform="Instagram"
           account={
@@ -1332,7 +1399,11 @@ function LiveAccountsPanel({
               ? `https://www.instagram.com/${newGloryInstagramUsername}/`
               : undefined
           }
-          actionHref={newGloryInstagram ? undefined : "/api/connect/instagram?profile=newglory"}
+          actionHref={
+            newGloryInstagram || newGloryMeta?.igBusinessId
+              ? undefined
+              : "/api/connect/instagram?profile=newglory"
+          }
           actionLabel="Connect New Glory Instagram"
           stats={[
             [
@@ -1357,9 +1428,11 @@ function LiveAccountsPanel({
           postsMessage={newGloryInstagram?.mediaMessage}
           contributorMessage={newGloryInstagram?.contributorMessage}
           insightsMessage={newGloryInstagram?.insightsMessage}
-        />
+          />
+        )}
 
-        <AccountStatCard
+        {showThreads && (
+          <AccountStatCard
           group="Personal"
           platform="Threads"
           account={
@@ -1389,9 +1462,11 @@ function LiveAccountsPanel({
           externalPostsPlatform="Threads"
           postsMessage={liveMetrics.threads?.postsMessage}
           insightsMessage={liveMetrics.threads?.insightsMessage}
-        />
+          />
+        )}
 
-        <AccountStatCard
+        {newGloryMeta && (
+          <AccountStatCard
           group="New Glory"
           platform="Facebook"
           account={newGloryMeta?.pageName ?? "New Glory Running Collective"}
@@ -1420,9 +1495,11 @@ function LiveAccountsPanel({
           externalPostsPlatform="Facebook"
           postsMessage={newGloryMeta?.fbPostsMessage}
           insightsMessage={newGloryMeta?.fbInsightsMessage}
-        />
+          />
+        )}
 
-        <AccountStatCard
+        {showLinkedInPersonal && (
+          <AccountStatCard
           group="Personal"
           platform="LinkedIn"
           account={linkedInProfile?.name ?? "Thijs Wijma"}
@@ -1435,9 +1512,11 @@ function LiveAccountsPanel({
             ["Connections", formatStat(linkedInProfile?.connectionsCount)],
           ]}
           insightsMessage={linkedInProfile?.message ?? liveMetrics.linkedin?.message}
-        />
+          />
+        )}
 
-        <AccountStatCard
+        {showLinkedInOrganization && (
+          <AccountStatCard
           group="New Glory"
           platform="LinkedIn"
           account={linkedInOrganization?.name ?? "New Glory Running Collective"}
@@ -1458,9 +1537,11 @@ function LiveAccountsPanel({
             ["Engagement rate", formatPercent(linkedInOrganization?.engagementRate)],
           ]}
           insightsMessage={linkedInOrganization?.message}
-        />
+          />
+        )}
 
-        <AccountStatCard
+        {showTikTok && (
+          <AccountStatCard
           group="Personal"
           platform="TikTok"
           account={tikTokUser?.display_name ?? connectedProfiles.personal.tiktok}
@@ -1469,7 +1550,8 @@ function LiveAccountsPanel({
             ["Open ID", tikTokUser?.open_id ?? "n/a"],
             ["Videos", liveMetrics.tiktok?.videos?.videos?.length?.toString() ?? liveMetrics.tiktok?.videosMessage ?? "n/a"],
           ]}
-        />
+          />
+        )}
       </div>
     </PremiumCard>
   );
@@ -2255,6 +2337,9 @@ function StatisticsTab() {
   const linkedInOrganizations = liveMetrics.linkedin?.identity?.organizations ?? [];
   const linkedInOrganization = findLinkedInOrganization(linkedInOrganizations);
   const threadsProfile = liveMetrics.threads?.profile;
+  const showLinkedInPersonal = hasLinkedInPersonalLiveData(linkedInProfile);
+  const showLinkedInOrganization = hasLinkedInOrganizationLiveData(linkedInOrganization);
+  const showThreads = hasThreadsLiveData(liveMetrics.threads);
   const contentItems: InstagramContentWithProfile[] = instagramProfiles
     .flatMap((profile) =>
       getProfileContent(profile).map((media) => ({
@@ -2405,7 +2490,8 @@ function StatisticsTab() {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
-        <PremiumCard>
+        {newGloryMeta && (
+          <PremiumCard>
           <div className="mb-4 flex items-center justify-between gap-3">
             <h2 className="text-lg font-medium">New Glory Facebook Statistics</h2>
             <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-slate-300">
@@ -2448,9 +2534,11 @@ function StatisticsTab() {
           {newGloryMeta?.fbInsightsMessage && (
             <p className="mt-3 text-xs text-amber-200">{newGloryMeta.fbInsightsMessage}</p>
           )}
-        </PremiumCard>
+          </PremiumCard>
+        )}
 
-        <PremiumCard>
+        {showLinkedInPersonal && (
+          <PremiumCard>
           <div className="mb-4 flex items-center justify-between gap-3">
             <h2 className="text-lg font-medium">Personal LinkedIn Statistics</h2>
             <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-slate-300">
@@ -2476,9 +2564,11 @@ function StatisticsTab() {
               {linkedInProfile?.message ?? liveMetrics.linkedin?.message}
             </p>
           )}
-        </PremiumCard>
+          </PremiumCard>
+        )}
 
-        <PremiumCard>
+        {showLinkedInOrganization && (
+          <PremiumCard>
           <div className="mb-4 flex items-center justify-between gap-3">
             <h2 className="text-lg font-medium">New Glory LinkedIn Statistics</h2>
             <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-slate-300">
@@ -2513,9 +2603,11 @@ function StatisticsTab() {
               {linkedInOrganization?.message ?? liveMetrics.linkedin?.message}
             </p>
           )}
-        </PremiumCard>
+          </PremiumCard>
+        )}
 
-        <PremiumCard>
+        {showThreads && (
+          <PremiumCard>
           <div className="mb-4 flex items-center justify-between gap-3">
             <h2 className="text-lg font-medium">Personal Threads Statistics</h2>
             <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-slate-300">
@@ -2553,7 +2645,8 @@ function StatisticsTab() {
           {liveMetrics.threads?.insightsMessage && (
             <p className="mt-3 text-xs text-amber-200">{liveMetrics.threads.insightsMessage}</p>
           )}
-        </PremiumCard>
+          </PremiumCard>
+        )}
       </div>
 
       <PremiumCard>
@@ -3019,12 +3112,15 @@ function LinkedInTab() {
   const liveMetrics = useLiveMetrics();
   const profile = liveMetrics.linkedin?.identity?.personalProfile;
   const organization = findLinkedInOrganization(liveMetrics.linkedin?.identity?.organizations);
+  const showProfile = hasLinkedInPersonalLiveData(profile);
+  const showOrganization = hasLinkedInOrganizationLiveData(organization);
 
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-5">
-      <PlatformIntro title="LinkedIn" connected={Boolean(profile || organization)} href="/api/connect/linkedin" />
+      <PlatformIntro title="LinkedIn" connected={showProfile || showOrganization} href="/api/connect/linkedin" />
       <div className="grid gap-4 lg:grid-cols-2">
-        <AccountStatCard
+        {showProfile && (
+          <AccountStatCard
           group="Personal"
           platform="LinkedIn"
           account={profile?.name ?? "Thijs Wijma"}
@@ -3039,8 +3135,10 @@ function LinkedInTab() {
             ["Connections", formatStat(profile?.connectionsCount)],
           ]}
           insightsMessage={profile?.message ?? liveMetrics.linkedin?.message}
-        />
-        <AccountStatCard
+          />
+        )}
+        {showOrganization && (
+          <AccountStatCard
           group="New Glory"
           platform="LinkedIn"
           account={organization?.name ?? "New Glory Running Collective"}
@@ -3058,8 +3156,16 @@ function LinkedInTab() {
             ["Engagement rate", formatPercent(organization?.engagementRate)],
           ]}
           insightsMessage={organization?.message}
-        />
+          />
+        )}
       </div>
+      {!showProfile && !showOrganization && (
+        <PremiumCard>
+          <p className="text-sm text-slate-300">
+            LinkedIn accounts are hidden until follower, connection, or page analytics can be fetched.
+          </p>
+        </PremiumCard>
+      )}
     </motion.div>
   );
 }
@@ -3067,25 +3173,32 @@ function LinkedInTab() {
 function TikTokTab() {
   const liveMetrics = useLiveMetrics();
   const user = liveMetrics.tiktok?.profile?.data?.user;
+  const showTikTok = hasTikTokLiveData(liveMetrics.tiktok);
 
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-5">
-      <PlatformIntro title="TikTok" connected={Boolean(user)} href="/api/connect/tiktok" />
-      <AccountStatCard
-        group="Personal"
-        platform="TikTok"
-        account={user?.display_name ?? connectedProfiles.personal.tiktok}
-        status={user ? "Connected" : "Connect TikTok"}
-        actionHref={user ? undefined : "/api/connect/tiktok"}
-        actionLabel="Connect TikTok"
-        avatarUrl={user?.avatar_url}
-        stats={[
-          ["Open ID", user?.open_id ?? "n/a"],
-          ["Videos", liveMetrics.tiktok?.videos?.videos?.length?.toString() ?? liveMetrics.tiktok?.videosMessage ?? "n/a"],
-          ["Scopes", liveMetrics.tiktok?.scope ?? "n/a"],
-        ]}
-        insightsMessage={liveMetrics.tiktok?.message}
-      />
+      <PlatformIntro title="TikTok" connected={showTikTok} href="/api/connect/tiktok" />
+      {showTikTok ? (
+        <AccountStatCard
+          group="Personal"
+          platform="TikTok"
+          account={user?.display_name ?? connectedProfiles.personal.tiktok}
+          status="Connected"
+          avatarUrl={user?.avatar_url}
+          stats={[
+            ["Open ID", user?.open_id ?? "n/a"],
+            ["Videos", liveMetrics.tiktok?.videos?.videos?.length?.toString() ?? liveMetrics.tiktok?.videosMessage ?? "n/a"],
+            ["Scopes", liveMetrics.tiktok?.scope ?? "n/a"],
+          ]}
+          insightsMessage={liveMetrics.tiktok?.message}
+        />
+      ) : (
+        <PremiumCard>
+          <p className="text-sm text-slate-300">
+            TikTok is hidden until the account connection can return live profile and video data.
+          </p>
+        </PremiumCard>
+      )}
     </motion.div>
   );
 }
