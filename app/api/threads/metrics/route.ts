@@ -31,6 +31,12 @@ type ThreadsProfileResponse = ThreadsApiError & {
 type ThreadsInsightsResponse = ThreadsApiError & {
   data?: Array<{
     name?: string;
+    total_value?:
+      | number
+      | {
+          value?: number | null;
+        }
+      | null;
     values?: Array<{
       value?: number | null;
     }>;
@@ -74,10 +80,19 @@ function getInsightValue(
   metric: string,
   reducer: "sum" | "latest" = "latest"
 ) {
+  const insight = insights.data?.find((item) => item.name === metric);
+  const totalValue =
+    typeof insight?.total_value === "number"
+      ? insight.total_value
+      : typeof insight?.total_value?.value === "number"
+        ? insight.total_value.value
+        : null;
+
+  if (typeof totalValue === "number") return totalValue;
+
   const values =
-    insights.data
-      ?.find((item) => item.name === metric)
-      ?.values?.map((item) => item.value)
+    insight?.values
+      ?.map((item) => item.value)
       .filter((value): value is number => typeof value === "number") ?? [];
 
   if (!values.length) return null;
@@ -111,28 +126,46 @@ async function fetchThreadsProfile(accessToken: string) {
 }
 
 async function fetchThreadsAccountInsights(userId: string, accessToken: string) {
-  const url = new URL(`https://graph.threads.net/v1.0/${userId}/threads_insights`);
-  url.searchParams.set("metric", "views,likes,replies,reposts,quotes,followers_count");
-  url.searchParams.set("access_token", accessToken);
+  const viewsUrl = new URL(`https://graph.threads.net/v1.0/${userId}/threads_insights`);
+  viewsUrl.searchParams.set("metric", "views");
+  viewsUrl.searchParams.set("access_token", accessToken);
 
-  const res = await fetch(url.toString(), { method: "GET" });
-  const json = (await res.json()) as ThreadsInsightsResponse;
+  const totalsUrl = new URL(`https://graph.threads.net/v1.0/${userId}/threads_insights`);
+  totalsUrl.searchParams.set("metric", "likes,replies,reposts,quotes,followers_count");
+  totalsUrl.searchParams.set("metric_type", "total_value");
+  totalsUrl.searchParams.set("access_token", accessToken);
 
-  if (!res.ok) {
+  const [viewsRes, totalsRes] = await Promise.all([
+    fetch(viewsUrl.toString(), { method: "GET" }),
+    fetch(totalsUrl.toString(), { method: "GET" }),
+  ]);
+  const viewsJson = (await viewsRes.json()) as ThreadsInsightsResponse;
+  const totalsJson = (await totalsRes.json()) as ThreadsInsightsResponse;
+
+  if (!viewsRes.ok || !totalsRes.ok) {
     return {
       insights: null,
-      message: getThreadsErrorMessage(json, "Threads account insights were not returned."),
+      message: [
+        !viewsRes.ok
+          ? getThreadsErrorMessage(viewsJson, "Threads account views were not returned.")
+          : null,
+        !totalsRes.ok
+          ? getThreadsErrorMessage(totalsJson, "Threads account interaction totals were not returned.")
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" "),
     };
   }
 
   return {
     insights: {
-      views: getInsightValue(json, "views", "sum"),
-      likes: getInsightValue(json, "likes", "sum"),
-      replies: getInsightValue(json, "replies", "sum"),
-      reposts: getInsightValue(json, "reposts", "sum"),
-      quotes: getInsightValue(json, "quotes", "sum"),
-      followersCount: getInsightValue(json, "followers_count"),
+      views: getInsightValue(viewsJson, "views", "sum"),
+      likes: getInsightValue(totalsJson, "likes"),
+      replies: getInsightValue(totalsJson, "replies"),
+      reposts: getInsightValue(totalsJson, "reposts"),
+      quotes: getInsightValue(totalsJson, "quotes"),
+      followersCount: getInsightValue(totalsJson, "followers_count"),
     },
     message: null,
   };

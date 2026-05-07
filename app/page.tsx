@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useEffect, useMemo, useState, type ReactNode } from "react";
+import { use, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { motion } from "framer-motion";
 import {
   Bar,
@@ -222,6 +222,16 @@ type ThreadsMetricsResponse = {
   profileMessage?: string | null;
   insightsMessage?: string | null;
   postsMessage?: string | null;
+};
+
+type ThreadsActionResponse = {
+  ok: boolean;
+  action?: string | null;
+  message?: string | null;
+  postId?: string | null;
+  result?: unknown;
+  container?: unknown;
+  published?: unknown;
 };
 
 type TikTokMetricsResponse = {
@@ -514,6 +524,21 @@ function sumProfileContent(profiles: InstagramProfileMetric[]) {
 async function fetchJson<T>(path: string): Promise<T> {
   const res = await fetch(path, { cache: "no-store" });
   const json = (await res.json()) as T;
+  return json;
+}
+
+async function postThreadsAction(payload: Record<string, unknown>) {
+  const res = await fetch("/api/threads/actions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const json = (await res.json()) as ThreadsActionResponse;
+
+  if (!res.ok && !json.message) {
+    return { ...json, ok: false, message: "Threads action failed." };
+  }
+
   return json;
 }
 
@@ -1551,6 +1576,303 @@ function AccountStatCard({
   );
 }
 
+function ThreadsActionPanel({ connected }: { connected: boolean }) {
+  const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [result, setResult] = useState<ThreadsActionResponse | null>(null);
+  const [publishText, setPublishText] = useState("");
+  const [mediaType, setMediaType] = useState("TEXT");
+  const [mediaUrl, setMediaUrl] = useState("");
+  const [altText, setAltText] = useState("");
+  const [replyToId, setReplyToId] = useState("");
+  const [replyControl, setReplyControl] = useState("everyone");
+  const [topicTag, setTopicTag] = useState("");
+  const [locationId, setLocationId] = useState("");
+  const [shareToInstagram, setShareToInstagram] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchType, setSearchType] = useState("TOP");
+  const [profileUsername, setProfileUsername] = useState("");
+  const [threadId, setThreadId] = useState("");
+  const [replyThreadId, setReplyThreadId] = useState("");
+  const [replyText, setReplyText] = useState("");
+  const [locationQuery, setLocationQuery] = useState("");
+
+  const inputClass =
+    "w-full rounded-md border border-white/10 bg-black/20 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-violet-300";
+  const buttonClass =
+    "rounded-md bg-violet-500 px-3 py-2 text-sm font-medium text-white transition hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-50";
+  const secondaryButtonClass =
+    "rounded-md bg-white/10 px-3 py-2 text-sm font-medium text-slate-100 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50";
+
+  const runAction = async (action: string, payload: Record<string, unknown>) => {
+    setBusyAction(action);
+    const response = await postThreadsAction({ action, ...payload }).catch((error: Error) => ({
+      ok: false,
+      action,
+      message: error.message,
+    }));
+    setResult(response);
+    setBusyAction(null);
+  };
+
+  const submitPublish = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    void runAction("publish", {
+      text: publishText,
+      mediaType,
+      mediaUrl,
+      altText,
+      replyToId,
+      replyControl,
+      topicTag,
+      locationId,
+      shareToInstagram,
+    });
+  };
+
+  return (
+    <PremiumCard>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-medium">Threads Control Center</h2>
+          <p className="mt-1 text-sm text-slate-300">
+            {connected ? "Connected account actions are available." : "Reconnect Threads with the expanded scopes first."}
+          </p>
+        </div>
+        <a href="/api/connect/threads" className="rounded-md bg-white/10 px-3 py-2 text-sm font-medium hover:bg-white/15">
+          Reconnect Threads
+        </a>
+      </div>
+
+      <div className="mb-4 flex flex-wrap gap-2 text-xs text-slate-300">
+        {[
+          "basic",
+          "insights",
+          "publish",
+          "delete",
+          "search",
+          "locations",
+          "mentions",
+          "replies",
+          "discovery",
+          "share to Instagram",
+        ].map((scope) => (
+          <span key={scope} className="rounded-full border border-white/10 bg-white/5 px-2 py-1">
+            {scope}
+          </span>
+        ))}
+      </div>
+
+      <div className="grid gap-5 xl:grid-cols-2">
+        <form onSubmit={submitPublish} className="space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-sm font-medium uppercase text-slate-300">Publish</h3>
+            <span className="text-xs text-slate-400">{publishText.length}/500</span>
+          </div>
+          <textarea
+            value={publishText}
+            onChange={(event) => setPublishText(event.target.value.slice(0, 500))}
+            className={`${inputClass} min-h-28 resize-y`}
+            placeholder="Threads post text"
+          />
+          <div className="grid gap-3 sm:grid-cols-3">
+            <select value={mediaType} onChange={(event) => setMediaType(event.target.value)} className={inputClass}>
+              <option value="TEXT">Text</option>
+              <option value="IMAGE">Image</option>
+              <option value="VIDEO">Video</option>
+            </select>
+            <select value={replyControl} onChange={(event) => setReplyControl(event.target.value)} className={inputClass}>
+              <option value="everyone">Everyone</option>
+              <option value="followers">Followers</option>
+              <option value="mentioned_only">Mentioned only</option>
+            </select>
+            <label className="flex items-center gap-2 rounded-md border border-white/10 bg-black/20 px-3 py-2 text-sm text-slate-200">
+              <input
+                type="checkbox"
+                checked={shareToInstagram}
+                onChange={(event) => setShareToInstagram(event.target.checked)}
+              />
+              Instagram
+            </label>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <input value={mediaUrl} onChange={(event) => setMediaUrl(event.target.value)} className={inputClass} placeholder="Public media URL" />
+            <input value={altText} onChange={(event) => setAltText(event.target.value)} className={inputClass} placeholder="Alt text" />
+            <input value={replyToId} onChange={(event) => setReplyToId(event.target.value)} className={inputClass} placeholder="Reply to post ID" />
+            <input value={topicTag} onChange={(event) => setTopicTag(event.target.value)} className={inputClass} placeholder="Topic tag" />
+            <input value={locationId} onChange={(event) => setLocationId(event.target.value)} className={inputClass} placeholder="Location ID" />
+          </div>
+          <button disabled={!connected || busyAction === "publish"} className={buttonClass}>
+            {busyAction === "publish" ? "Publishing..." : "Publish to Threads"}
+          </button>
+        </form>
+
+        <div className="space-y-4">
+          <section className="space-y-3">
+            <h3 className="text-sm font-medium uppercase text-slate-300">Discovery</h3>
+            <div className="grid gap-3 sm:grid-cols-[1fr_auto_auto]">
+              <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} className={inputClass} placeholder="Keyword" />
+              <select value={searchType} onChange={(event) => setSearchType(event.target.value)} className={inputClass}>
+                <option value="TOP">Top</option>
+                <option value="RECENT">Recent</option>
+              </select>
+              <button
+                type="button"
+                disabled={!connected || busyAction === "search"}
+                onClick={() => void runAction("search", { query: searchQuery, searchType })}
+                className={secondaryButtonClass}
+              >
+                Search
+              </button>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-[1fr_auto_auto]">
+              <input
+                value={profileUsername}
+                onChange={(event) => setProfileUsername(event.target.value)}
+                className={inputClass}
+                placeholder="Threads username"
+              />
+              <button
+                type="button"
+                disabled={!connected || busyAction === "profileLookup"}
+                onClick={() => void runAction("profileLookup", { username: profileUsername })}
+                className={secondaryButtonClass}
+              >
+                Profile
+              </button>
+              <button
+                type="button"
+                disabled={!connected || busyAction === "profilePosts"}
+                onClick={() => void runAction("profilePosts", { username: profileUsername })}
+                className={secondaryButtonClass}
+              >
+                Posts
+              </button>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+              <input value={locationQuery} onChange={(event) => setLocationQuery(event.target.value)} className={inputClass} placeholder="Location query" />
+              <button
+                type="button"
+                disabled={!connected || busyAction === "locationSearch"}
+                onClick={() => void runAction("locationSearch", { query: locationQuery })}
+                className={secondaryButtonClass}
+              >
+                Locations
+              </button>
+            </div>
+          </section>
+
+          <section className="space-y-3">
+            <h3 className="text-sm font-medium uppercase text-slate-300">Replies and Moderation</h3>
+            <div className="grid gap-3 sm:grid-cols-[1fr_auto_auto]">
+              <input value={threadId} onChange={(event) => setThreadId(event.target.value)} className={inputClass} placeholder="Post ID" />
+              <button
+                type="button"
+                disabled={!connected || busyAction === "replies"}
+                onClick={() => void runAction("replies", { threadId })}
+                className={secondaryButtonClass}
+              >
+                Replies
+              </button>
+              <button
+                type="button"
+                disabled={!connected || busyAction === "conversation"}
+                onClick={() => void runAction("conversation", { threadId })}
+                className={secondaryButtonClass}
+              >
+                Thread
+              </button>
+            </div>
+            <textarea
+              value={replyText}
+              onChange={(event) => setReplyText(event.target.value.slice(0, 500))}
+              className={`${inputClass} min-h-20 resize-y`}
+              placeholder="Reply text"
+            />
+            <div className="grid gap-3 sm:grid-cols-[1fr_auto_auto_auto]">
+              <input value={replyThreadId} onChange={(event) => setReplyThreadId(event.target.value)} className={inputClass} placeholder="Reply ID" />
+              <button
+                type="button"
+                disabled={!connected || busyAction === "publish"}
+                onClick={() =>
+                  void runAction("publish", {
+                    text: replyText,
+                    mediaType: "TEXT",
+                    replyToId: replyThreadId || threadId,
+                  })
+                }
+                className={secondaryButtonClass}
+              >
+                Reply
+              </button>
+              <button
+                type="button"
+                disabled={!connected || busyAction === "manageReply"}
+                onClick={() => void runAction("manageReply", { replyThreadId, hide: true })}
+                className={secondaryButtonClass}
+              >
+                Hide
+              </button>
+              <button
+                type="button"
+                disabled={!connected || busyAction === "manageReply"}
+                onClick={() => void runAction("manageReply", { replyThreadId, hide: false })}
+                className={secondaryButtonClass}
+              >
+                Unhide
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={!connected || busyAction === "mentions"}
+                onClick={() => void runAction("mentions", {})}
+                className={secondaryButtonClass}
+              >
+                Mentions
+              </button>
+              <button
+                type="button"
+                disabled={!connected || busyAction === "managePendingReply"}
+                onClick={() => void runAction("managePendingReply", { replyThreadId, approve: true })}
+                className={secondaryButtonClass}
+              >
+                Approve
+              </button>
+              <button
+                type="button"
+                disabled={!connected || busyAction === "managePendingReply"}
+                onClick={() => void runAction("managePendingReply", { replyThreadId, approve: false })}
+                className={secondaryButtonClass}
+              >
+                Ignore
+              </button>
+              <button
+                type="button"
+                disabled={!connected || busyAction === "delete"}
+                onClick={() => void runAction("delete", { threadId })}
+                className="rounded-md bg-red-500/80 px-3 py-2 text-sm font-medium text-white transition hover:bg-red-400 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Delete post
+              </button>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      {result && (
+        <div className="mt-5">
+          <div className={`mb-2 rounded-md px-3 py-2 text-sm ${result.ok ? "bg-emerald-500/15 text-emerald-100" : "bg-red-500/15 text-red-100"}`}>
+            {result.ok ? "Threads action complete." : result.message ?? "Threads action failed."}
+          </div>
+          <pre className="max-h-72 overflow-auto rounded-md bg-black/40 p-3 text-xs text-slate-200">
+            {JSON.stringify(result, null, 2)}
+          </pre>
+        </div>
+      )}
+    </PremiumCard>
+  );
+}
+
 function StatisticsTab() {
   const [range, setRange] = useState<Range>("Month");
   const liveMetrics = useLiveMetrics();
@@ -1847,6 +2169,8 @@ function StatisticsTab() {
           )}
         </PremiumCard>
       </div>
+
+      <ThreadsActionPanel connected={Boolean(threadsProfile)} />
 
       <div className="grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
         <PremiumCard>

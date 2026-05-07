@@ -5,10 +5,29 @@ const TEN_MINUTES = 60 * 10;
 const DEFAULT_THREADS_SCOPES = [
   "threads_basic",
   "threads_manage_insights",
+  "threads_content_publish",
+  "threads_delete",
+  "threads_keyword_search",
+  "threads_location_tagging",
+  "threads_manage_mentions",
+  "threads_manage_replies",
+  "threads_profile_discovery",
+  "threads_read_replies",
+  "threads_share_to_instagram",
 ];
 
 function getThreadsScopes() {
-  return process.env.THREADS_SCOPES?.trim() || DEFAULT_THREADS_SCOPES.join(",");
+  const configuredScopes = process.env.THREADS_SCOPES?.trim();
+  const scopes = configuredScopes || DEFAULT_THREADS_SCOPES.join(",");
+
+  return Array.from(
+    new Set(
+      scopes
+        .split(/[,\s]+/)
+        .map((scope) => scope.trim())
+        .filter(Boolean)
+    )
+  ).join(",");
 }
 
 export async function GET() {
