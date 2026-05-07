@@ -13,8 +13,9 @@ import {
   YAxis,
 } from "recharts";
 
-type Tab = "Home" | "Statistics" | "Planning";
+type Tab = "Home" | "Statistics" | "Planning" | "Instagram" | "Threads" | "Facebook" | "LinkedIn" | "TikTok";
 type Range = "Day" | "Week" | "Month" | "Year";
+type WorkflowMode = "Post" | "Inbox" | "Discovery" | "Settings";
 
 type Task = {
   id: string;
@@ -31,6 +32,11 @@ type CalendarItem = {
   date: string;
   time: string;
   status: "Draft" | "Scheduled" | "Posted";
+};
+
+type PlannerDragItem = {
+  type: "task" | "scheduled";
+  id: string;
 };
 
 type ConnectedPage = {
@@ -234,6 +240,8 @@ type ThreadsActionResponse = {
   published?: unknown;
 };
 
+type InstagramActionResponse = ThreadsActionResponse;
+
 type TikTokMetricsResponse = {
   ok: boolean;
   message?: string;
@@ -281,7 +289,8 @@ type ConnectionSummary = {
   tikTokError: string | null;
 };
 
-const tabs: Tab[] = ["Home", "Statistics", "Planning"];
+const tabs: Tab[] = ["Home", "Statistics", "Planning", "Instagram", "Threads", "Facebook", "LinkedIn", "TikTok"];
+const workflowModes: WorkflowMode[] = ["Post", "Inbox", "Discovery", "Settings"];
 const ranges: Range[] = ["Day", "Week", "Month", "Year"];
 const connectedProfiles = {
   personal: {
@@ -504,6 +513,14 @@ function getStories(profile: InstagramProfileMetric | undefined) {
   return profile?.stories ?? [];
 }
 
+function createClientId(prefix: string) {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `${prefix}-${crypto.randomUUID()}`;
+  }
+
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 function sumProfileInsights(
   profiles: InstagramProfileMetric[],
   field: keyof Pick<
@@ -537,6 +554,21 @@ async function postThreadsAction(payload: Record<string, unknown>) {
 
   if (!res.ok && !json.message) {
     return { ...json, ok: false, message: "Threads action failed." };
+  }
+
+  return json;
+}
+
+async function postInstagramAction(payload: Record<string, unknown>) {
+  const res = await fetch("/api/instagram/actions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const json = (await res.json()) as InstagramActionResponse;
+
+  if (!res.ok && !json.message) {
+    return { ...json, ok: false, message: "Instagram action failed." };
   }
 
   return json;
@@ -671,6 +703,11 @@ export default function DashboardPage({ searchParams }: { searchParams: Dashboar
         )}
         {activeTab === "Statistics" && <StatisticsTab />}
         {activeTab === "Planning" && <PlanningTab />}
+        {activeTab === "Instagram" && <InstagramTab />}
+        {activeTab === "Threads" && <ThreadsTab />}
+        {activeTab === "Facebook" && <FacebookTab />}
+        {activeTab === "LinkedIn" && <LinkedInTab />}
+        {activeTab === "TikTok" && <TikTokTab />}
       </div>
     </main>
   );
@@ -713,8 +750,6 @@ function HomeTab({
   tikTokConnected: boolean;
   tikTokError: string | null;
 }) {
-  const [tasks, setTasks] = useState(initialTasks);
-  const [newTask, setNewTask] = useState("");
   const liveMetrics = useLiveMetrics();
   const newGloryMeta = findNewGloryMeta(liveMetrics.meta?.metrics);
   const personalMeta = findPersonalMeta(liveMetrics.meta?.metrics);
@@ -726,22 +761,6 @@ function HomeTab({
     liveMetrics.instagram?.profiles,
     "newglory"
   );
-  const instagramProfiles = [personalInstagram, newGloryInstagram].filter(
-    (profile): profile is InstagramProfileMetric => Boolean(profile)
-  );
-  const recentInstagramPosts = instagramProfiles
-    .flatMap((profile) =>
-      getProfileContent(profile).map((media) => ({
-        ...media,
-        profile,
-      }))
-    )
-    .sort((a, b) => {
-      const aTime = a.timestamp ? new Date(a.timestamp).getTime() : 0;
-      const bTime = b.timestamp ? new Date(b.timestamp).getTime() : 0;
-      return bTime - aTime;
-    })
-    .slice(0, 6);
   const linkedInOrganization = findLinkedInOrganization(
     liveMetrics.linkedin?.identity?.organizations
   );
@@ -763,19 +782,6 @@ function HomeTab({
     Boolean(tikTokUser),
   ].filter(Boolean).length;
 
-  const toggleTask = (id: string) => {
-    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, done: !t.done } : t)));
-  };
-
-  const addManualTask = () => {
-    if (!newTask.trim()) return;
-    setTasks((prev) => [
-      { id: crypto.randomUUID(), text: newTask.trim(), priority: "Medium", done: false, source: "Manual" },
-      ...prev,
-    ]);
-    setNewTask("");
-  };
-
   const kpis = [
     { label: "Known Live Followers", value: liveMetrics.loading ? "Loading..." : formatStat(totalKnownFollowers) },
     { label: "Connected Sources", value: liveMetrics.loading ? "Loading..." : `${connectedPlatformCount}/5` },
@@ -793,71 +799,21 @@ function HomeTab({
         ))}
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <PremiumCard>
-          <h2 className="mb-4 text-lg font-medium">Today’s Tasks (Manual + Smart)</h2>
-          <div className="mb-3 flex gap-2">
-            <input
-              value={newTask}
-              onChange={(e) => setNewTask(e.target.value)}
-              placeholder="Add manual task..."
-              className="w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm"
-            />
-            <button onClick={addManualTask} className="rounded-lg bg-indigo-500 px-3 py-2 text-sm hover:bg-indigo-400">
-              Add
-            </button>
-          </div>
-          <ul className="space-y-2 text-sm">
-            {tasks.map((task) => (
-              <li key={task.id} className="flex items-center justify-between rounded-lg border border-white/10 bg-black/20 px-3 py-2">
-                <label className="flex items-center gap-2">
-                  <input type="checkbox" checked={task.done} onChange={() => toggleTask(task.id)} />
-                  <span className={task.done ? "line-through text-slate-500" : ""}>{task.text}</span>
-                </label>
-                <span className="text-xs text-slate-300">
-                  {task.priority} · {task.source}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </PremiumCard>
-
-        <PremiumCard>
-          <h2 className="mb-3 text-lg font-medium">Recent Posts</h2>
-          <InstagramRecentPosts posts={recentInstagramPosts} loading={liveMetrics.loading} />
-        </PremiumCard>
-      </div>
-
-      <PremiumCard>
-        <h2 className="mb-3 text-lg font-medium">Profile Groups</h2>
-        <div className="grid gap-3 text-sm md:grid-cols-2">
-          <div className="rounded-lg border border-white/10 bg-black/20 p-3">
-            <p className="mb-1 font-medium">Personal</p>
-            <p className="text-slate-300">Instagram: {connectedProfiles.personal.instagram}</p>
-            <a
-              href={connectedProfiles.personal.linkedin}
-              target="_blank"
-              rel="noreferrer"
-              className="text-indigo-300 underline"
-            >
-              LinkedIn profile
-            </a>
-          </div>
-
-          <div className="rounded-lg border border-white/10 bg-black/20 p-3">
-            <p className="mb-1 font-medium">New Glory</p>
-            <p className="text-slate-300">Instagram: {connectedProfiles.newGlory.instagram}</p>
-            <a
-              href={connectedProfiles.newGlory.linkedin}
-              target="_blank"
-              rel="noreferrer"
-              className="text-indigo-300 underline"
-            >
-              LinkedIn company page
-            </a>
-          </div>
-        </div>
-      </PremiumCard>
+      <CompactConnectionPanel
+        metaConnected={metaConnected}
+        metaError={metaError}
+        connectedPages={connectedPages}
+        instagramConnected={instagramConnected}
+        instagramProfile={instagramProfile}
+        instagramError={instagramError}
+        linkedInConnected={linkedInConnected}
+        linkedInError={linkedInError}
+        linkedInErrorMessage={linkedInErrorMessage}
+        threadsConnected={threadsConnected || Boolean(threadsProfile)}
+        threadsError={threadsError}
+        tikTokConnected={tikTokConnected || Boolean(tikTokUser)}
+        tikTokError={tikTokError}
+      />
 
       <LiveAccountsPanel
         liveMetrics={liveMetrics}
@@ -867,143 +823,107 @@ function HomeTab({
         newGloryMeta={newGloryMeta}
         linkedInOrganization={linkedInOrganization}
       />
-
-      <div className="grid gap-4 lg:grid-cols-5">
-        <PremiumCard>
-          <h2 className="mb-3 text-lg font-medium">Connected Instagram Accounts</h2>
-          {instagramConnected && (
-            <p className="mb-2 text-sm text-emerald-300">
-              Instagram {instagramProfile ?? "account"} connected successfully
-            </p>
-          )}
-          {instagramError && (
-            <p className="mb-2 text-sm text-red-300">Instagram connection failed: {instagramError}</p>
-          )}
-          <div className="space-y-2">
-            <a
-              href="/api/connect/instagram?profile=personal"
-              className="inline-flex w-full justify-center rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium hover:bg-indigo-400"
-            >
-              Connect Personal Instagram
-            </a>
-            <a
-              href="/api/connect/instagram?profile=newglory"
-              className="inline-flex w-full justify-center rounded-lg bg-white/10 px-4 py-2 text-sm font-medium hover:bg-white/15"
-            >
-              Connect New Glory Instagram
-            </a>
-          </div>
-        </PremiumCard>
-
-        <PremiumCard>
-          <h2 className="mb-3 text-lg font-medium">Connected Meta Accounts</h2>
-
-          {!metaConnected && !metaError && (
-            <div className="space-y-2">
-              <p className="text-sm text-slate-300">No Meta accounts connected yet.</p>
-              <a href="/api/connect/meta" className="inline-flex rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium hover:bg-indigo-400">
-                Connect Meta (Facebook + Instagram)
-              </a>
-            </div>
-          )}
-
-          {metaError && (
-            <div className="space-y-2">
-              <p className="text-sm text-red-300">Meta connection failed: {metaError}</p>
-              <a href="/api/connect/meta" className="inline-flex rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium hover:bg-indigo-400">
-                Retry Meta Connect
-              </a>
-            </div>
-          )}
-
-          {metaConnected && (
-            <div className="space-y-2 text-sm">
-              <p className="text-emerald-300">Meta connected successfully</p>
-              {connectedPages.length === 0 ? (
-                <p className="text-slate-300">No pages returned.</p>
-              ) : (
-                <ul className="space-y-2">
-                  {connectedPages.map((p) => (
-                    <li key={p.id} className="rounded-lg border border-white/10 bg-black/20 px-3 py-2">
-                      <p className="font-medium">{p.name}</p>
-                      <p className="text-slate-400">
-                        Page ID: {p.id}
-                        {typeof p.fan_count === "number" ? ` · Followers: ${p.fan_count}` : " · Followers: n/a"}
-                        {p.ig ? ` · IG: @${p.ig.username ?? "unknown"} (${p.ig.id})` : " · IG not linked"}
-                      </p>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          )}
-        </PremiumCard>
-
-        <PremiumCard>
-          <h2 className="mb-3 text-lg font-medium">Connected LinkedIn Accounts</h2>
-          {linkedInConnected ? (
-            <div className="space-y-2 text-sm">
-              <p className="text-emerald-300">LinkedIn connected successfully</p>
-              <a href="/api/linkedin/metrics" className="inline-flex rounded-lg bg-white/10 px-4 py-2 text-sm font-medium hover:bg-white/15">
-                View LinkedIn identity
-              </a>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {linkedInError && (
-                <p className="text-sm text-red-300">
-                  LinkedIn connection failed: {linkedInErrorMessage}
-                </p>
-              )}
-              <p className="text-sm text-slate-300">No LinkedIn account connected yet.</p>
-              <a href="/api/connect/linkedin" className="inline-flex rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium hover:bg-indigo-400">
-                Connect LinkedIn
-              </a>
-            </div>
-          )}
-        </PremiumCard>
-
-        <PremiumCard>
-          <h2 className="mb-3 text-lg font-medium">Connected TikTok Account</h2>
-          {tikTokConnected ? (
-            <div className="space-y-2 text-sm">
-              <p className="text-emerald-300">TikTok connected successfully</p>
-              <a href="/api/tiktok/metrics" className="inline-flex rounded-lg bg-white/10 px-4 py-2 text-sm font-medium hover:bg-white/15">
-                View TikTok metrics
-              </a>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {tikTokError && <p className="text-sm text-red-300">TikTok connection failed: {tikTokError}</p>}
-              <p className="text-sm text-slate-300">No TikTok account connected yet.</p>
-              <a href="/api/connect/tiktok" className="inline-flex rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium hover:bg-indigo-400">
-                Connect TikTok
-              </a>
-            </div>
-          )}
-        </PremiumCard>
-
-        <PremiumCard>
-          <h2 className="mb-3 text-lg font-medium">Connected Threads Account</h2>
-          {threadsConnected ? (
-            <div className="space-y-2 text-sm">
-              <p className="text-emerald-300">Threads connected successfully</p>
-              <a href="/api/threads/metrics" className="inline-flex rounded-lg bg-white/10 px-4 py-2 text-sm font-medium hover:bg-white/15">
-                View Threads metrics
-              </a>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {threadsError && <p className="text-sm text-red-300">Threads connection failed: {threadsError}</p>}
-              <p className="text-sm text-slate-300">No Threads account connected yet.</p>
-              <a href="/api/connect/threads" className="inline-flex rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium hover:bg-indigo-400">
-                Connect Threads
-              </a>
-            </div>
-          )}
-        </PremiumCard>
-      </div>
     </motion.div>
+  );
+}
+
+function CompactConnectionPanel({
+  metaConnected,
+  metaError,
+  connectedPages,
+  instagramConnected,
+  instagramProfile,
+  instagramError,
+  linkedInConnected,
+  linkedInError,
+  linkedInErrorMessage,
+  threadsConnected,
+  threadsError,
+  tikTokConnected,
+  tikTokError,
+}: {
+  metaConnected: boolean;
+  metaError: string | null;
+  connectedPages: ConnectedPage[];
+  instagramConnected: boolean;
+  instagramProfile: string | null;
+  instagramError: string | null;
+  linkedInConnected: boolean;
+  linkedInError: boolean;
+  linkedInErrorMessage: string | null;
+  threadsConnected: boolean;
+  threadsError: string | null;
+  tikTokConnected: boolean;
+  tikTokError: string | null;
+}) {
+  const items = [
+    {
+      label: "Threads",
+      connected: threadsConnected,
+      message: threadsError,
+      href: "/api/connect/threads",
+      detail: threadsConnected ? "Connected" : "Connect",
+    },
+    {
+      label: "Instagram",
+      connected: instagramConnected,
+      message: instagramError,
+      href: "/api/connect/instagram?profile=personal",
+      detail: instagramConnected ? `${instagramProfile ?? "Account"} connected` : "Connect",
+    },
+    {
+      label: "Facebook",
+      connected: metaConnected,
+      message: metaError,
+      href: "/api/connect/meta",
+      detail: metaConnected ? `${connectedPages.length} page${connectedPages.length === 1 ? "" : "s"}` : "Connect",
+    },
+    {
+      label: "LinkedIn",
+      connected: linkedInConnected,
+      message: linkedInError ? linkedInErrorMessage : null,
+      href: "/api/connect/linkedin",
+      detail: linkedInConnected ? "Connected" : "Connect",
+    },
+    {
+      label: "TikTok",
+      connected: tikTokConnected,
+      message: tikTokError,
+      href: "/api/connect/tiktok",
+      detail: tikTokConnected ? "Connected" : "Connect",
+    },
+  ].sort((a, b) => Number(b.connected) - Number(a.connected));
+
+  return (
+    <section className="rounded-xl border border-white/10 bg-white/5 p-3 backdrop-blur-xl">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <h2 className="text-sm font-medium text-slate-200">Connections</h2>
+        <span className="text-xs text-slate-400">
+          {items.filter((item) => item.connected).length}/{items.length} live
+        </span>
+      </div>
+      <div className="grid gap-2 md:grid-cols-5">
+        {items.map((item) => (
+          <a
+            key={item.label}
+            href={item.href}
+            className={`rounded-lg border px-3 py-2 text-sm transition hover:bg-white/10 ${
+              item.connected
+                ? "border-emerald-300/20 bg-emerald-400/10"
+                : "border-white/10 bg-black/20"
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-medium">{item.label}</span>
+              <span className={item.connected ? "text-emerald-200" : "text-slate-400"}>
+                {item.connected ? "Live" : "Off"}
+              </span>
+            </div>
+            <p className="mt-1 truncate text-xs text-slate-400">{item.message ?? item.detail}</p>
+          </a>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -1127,6 +1047,38 @@ function LiveAccountsPanel({
 
         <AccountStatCard
           group="Personal"
+          platform="Threads"
+          account={
+            threadsProfile?.username
+              ? `@${threadsProfile.username}`
+              : connectedProfiles.personal.threads
+          }
+          status={threadsProfile ? "Live" : "Connect Threads"}
+          avatarUrl={threadsProfile?.profilePictureUrl}
+          href={
+            threadsProfile?.username
+              ? `https://www.threads.net/@${threadsProfile.username}`
+              : undefined
+          }
+          actionHref={threadsProfile ? undefined : "/api/connect/threads"}
+          actionLabel="Connect Threads"
+          stats={[
+            ["Followers", formatStat(liveMetrics.threads?.insights?.followersCount)],
+            ["Views", formatStat(liveMetrics.threads?.insights?.views)],
+            ["Likes", formatStat(liveMetrics.threads?.insights?.likes)],
+            ["Replies", formatStat(liveMetrics.threads?.insights?.replies)],
+            ["Reposts", formatStat(liveMetrics.threads?.insights?.reposts)],
+            ["Quotes", formatStat(liveMetrics.threads?.insights?.quotes)],
+            ["Recent posts", formatStat(liveMetrics.threads?.posts?.length)],
+          ]}
+          externalPosts={liveMetrics.threads?.posts}
+          externalPostsPlatform="Threads"
+          postsMessage={liveMetrics.threads?.postsMessage}
+          insightsMessage={liveMetrics.threads?.insightsMessage}
+        />
+
+        <AccountStatCard
+          group="Personal"
           platform="Facebook"
           account={personalMeta?.pageName ?? connectedProfiles.personal.facebook}
           status={personalMeta ? "Live" : "Connect personal Facebook Page"}
@@ -1233,38 +1185,6 @@ function LiveAccountsPanel({
 
         <AccountStatCard
           group="Personal"
-          platform="Threads"
-          account={
-            threadsProfile?.username
-              ? `@${threadsProfile.username}`
-              : connectedProfiles.personal.threads
-          }
-          status={threadsProfile ? "Live" : "Connect Threads"}
-          avatarUrl={threadsProfile?.profilePictureUrl}
-          href={
-            threadsProfile?.username
-              ? `https://www.threads.net/@${threadsProfile.username}`
-              : undefined
-          }
-          actionHref={threadsProfile ? undefined : "/api/connect/threads"}
-          actionLabel="Connect Threads"
-          stats={[
-            ["Followers", formatStat(liveMetrics.threads?.insights?.followersCount)],
-            ["Views", formatStat(liveMetrics.threads?.insights?.views)],
-            ["Likes", formatStat(liveMetrics.threads?.insights?.likes)],
-            ["Replies", formatStat(liveMetrics.threads?.insights?.replies)],
-            ["Reposts", formatStat(liveMetrics.threads?.insights?.reposts)],
-            ["Quotes", formatStat(liveMetrics.threads?.insights?.quotes)],
-            ["Recent posts", formatStat(liveMetrics.threads?.posts?.length)],
-          ]}
-          externalPosts={liveMetrics.threads?.posts}
-          externalPostsPlatform="Threads"
-          postsMessage={liveMetrics.threads?.postsMessage}
-          insightsMessage={liveMetrics.threads?.insightsMessage}
-        />
-
-        <AccountStatCard
-          group="Personal"
           platform="TikTok"
           account={tikTokUser?.display_name ?? connectedProfiles.personal.tiktok}
           status={tikTokUser ? "Connected" : "Connect TikTok"}
@@ -1362,46 +1282,6 @@ function InstagramPostPreview({
   );
 }
 
-function InstagramRecentPosts({
-  posts,
-  loading,
-}: {
-  posts: Array<InstagramMediaMetric & { profile: InstagramProfileMetric }>;
-  loading: boolean;
-}) {
-  if (loading) {
-    return <p className="text-sm text-slate-300">Loading recent Instagram posts...</p>;
-  }
-
-  if (!posts.length) {
-    return (
-      <p className="text-sm text-slate-300">
-        Connect Instagram accounts to display recent post previews here.
-      </p>
-    );
-  }
-
-  return (
-    <div className="grid gap-3 sm:grid-cols-2">
-      {posts.slice(0, 4).map((post) => (
-        <div key={`${post.profile.profileGroup}-${post.id}`} className="rounded-lg border border-white/10 bg-black/20 p-2">
-          <div className="mb-2 flex items-center gap-2">
-            <ProfileAvatar
-              imageUrl={post.profile.profilePictureUrl}
-              label={post.profile.username ?? getProfileLabel(post.profile)}
-            />
-            <div>
-              <p className="text-xs text-slate-400">{getProfileLabel(post.profile)}</p>
-              <p className="text-sm font-medium">@{post.profile.username}</p>
-            </div>
-          </div>
-          <InstagramPostPreview media={post} compact />
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function ExternalPostPreview({
   post,
   platform = "Facebook",
@@ -1413,15 +1293,25 @@ function ExternalPostPreview({
     platform === "Threads"
       ? `${formatCompactStat(post.viewCount)} views · ${formatCompactStat(post.likeCount)} likes · ${formatCompactStat(post.replyCount)} replies`
       : `${formatCompactStat(post.reactionCount)} reactions · ${formatCompactStat(post.commentCount)} comments · ${formatCompactStat(post.shareCount)} shares`;
+  const isTextOnlyThreadsPost = platform === "Threads" && !post.pictureUrl;
   const content = (
     <div className="overflow-hidden rounded-md border border-white/10 bg-white/5">
       <div
-        className="aspect-video bg-black/30 bg-cover bg-center"
+        className={
+          isTextOnlyThreadsPost
+            ? "flex min-h-36 items-center bg-neutral-950 p-4"
+            : "aspect-video bg-black/30 bg-cover bg-center"
+        }
         style={post.pictureUrl ? { backgroundImage: `url(${post.pictureUrl})` } : undefined}
       >
-        {!post.pictureUrl && (
+        {isTextOnlyThreadsPost && (
+          <p className="line-clamp-5 text-sm leading-relaxed text-slate-100">
+            {post.message ?? "Threads text post"}
+          </p>
+        )}
+        {!post.pictureUrl && !isTextOnlyThreadsPost && (
           <div className="flex h-full items-center justify-center px-3 text-center text-xs text-slate-400">
-            No preview
+            Text post
           </div>
         )}
       </div>
@@ -1576,25 +1466,29 @@ function AccountStatCard({
   );
 }
 
-function ThreadsActionPanel({ connected }: { connected: boolean }) {
+function SocialWorkflowPanel({
+  platform,
+  connected,
+  instagramProfiles = [],
+}: {
+  platform: "Instagram" | "Threads";
+  connected: boolean;
+  instagramProfiles?: InstagramProfileMetric[];
+}) {
+  const [mode, setMode] = useState<WorkflowMode>("Post");
   const [busyAction, setBusyAction] = useState<string | null>(null);
-  const [result, setResult] = useState<ThreadsActionResponse | null>(null);
-  const [publishText, setPublishText] = useState("");
-  const [mediaType, setMediaType] = useState("TEXT");
+  const [result, setResult] = useState<InstagramActionResponse | ThreadsActionResponse | null>(null);
+  const [profileGroup, setProfileGroup] = useState<InstagramProfileGroup>("personal");
+  const [text, setText] = useState("");
+  const [caption, setCaption] = useState("");
+  const [mediaType, setMediaType] = useState(platform === "Threads" ? "TEXT" : "IMAGE");
   const [mediaUrl, setMediaUrl] = useState("");
   const [altText, setAltText] = useState("");
-  const [replyToId, setReplyToId] = useState("");
-  const [replyControl, setReplyControl] = useState("everyone");
-  const [topicTag, setTopicTag] = useState("");
-  const [locationId, setLocationId] = useState("");
+  const [targetId, setTargetId] = useState("");
+  const [secondaryId, setSecondaryId] = useState("");
+  const [query, setQuery] = useState("");
+  const [tagValue, setTagValue] = useState("");
   const [shareToInstagram, setShareToInstagram] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searchType, setSearchType] = useState("TOP");
-  const [profileUsername, setProfileUsername] = useState("");
-  const [threadId, setThreadId] = useState("");
-  const [replyThreadId, setReplyThreadId] = useState("");
-  const [replyText, setReplyText] = useState("");
-  const [locationQuery, setLocationQuery] = useState("");
 
   const inputClass =
     "w-full rounded-md border border-white/10 bg-black/20 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-violet-300";
@@ -1603,9 +1497,14 @@ function ThreadsActionPanel({ connected }: { connected: boolean }) {
   const secondaryButtonClass =
     "rounded-md bg-white/10 px-3 py-2 text-sm font-medium text-slate-100 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50";
 
-  const runAction = async (action: string, payload: Record<string, unknown>) => {
+  const runAction = async (action: string, payload: Record<string, unknown> = {}) => {
     setBusyAction(action);
-    const response = await postThreadsAction({ action, ...payload }).catch((error: Error) => ({
+    const request = platform === "Threads" ? postThreadsAction : postInstagramAction;
+    const response = await request({
+      action,
+      profileGroup,
+      ...payload,
+    }).catch((error: Error) => ({
       ok: false,
       action,
       message: error.message,
@@ -1614,18 +1513,32 @@ function ThreadsActionPanel({ connected }: { connected: boolean }) {
     setBusyAction(null);
   };
 
-  const submitPublish = (event: FormEvent<HTMLFormElement>) => {
+  const submitPost = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+
+    if (platform === "Threads") {
+      void runAction("publish", {
+        text,
+        mediaType,
+        mediaUrl,
+        altText,
+        replyToId: targetId,
+        topicTag: tagValue,
+        locationId: secondaryId,
+        shareToInstagram,
+      });
+      return;
+    }
+
     void runAction("publish", {
-      text: publishText,
+      caption,
       mediaType,
       mediaUrl,
       altText,
-      replyToId,
-      replyControl,
-      topicTag,
-      locationId,
-      shareToInstagram,
+      locationId: secondaryId,
+      userTags: tagValue,
+      productTags: tagValue,
+      collaborators: tagValue,
     });
   };
 
@@ -1633,236 +1546,188 @@ function ThreadsActionPanel({ connected }: { connected: boolean }) {
     <PremiumCard>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-medium">Threads Control Center</h2>
+          <h2 className="text-lg font-medium">{platform} Workspace</h2>
           <p className="mt-1 text-sm text-slate-300">
-            {connected ? "Connected account actions are available." : "Reconnect Threads with the expanded scopes first."}
+            {connected ? "Post, respond, discover, and manage from one focused panel." : `Connect ${platform} to enable live actions.`}
           </p>
         </div>
-        <a href="/api/connect/threads" className="rounded-md bg-white/10 px-3 py-2 text-sm font-medium hover:bg-white/15">
-          Reconnect Threads
+        <a
+          href={platform === "Threads" ? "/api/connect/threads" : "/api/connect/instagram?profile=personal"}
+          className="rounded-md bg-white/10 px-3 py-2 text-sm font-medium hover:bg-white/15"
+        >
+          {connected ? "Reconnect" : "Connect"}
         </a>
       </div>
 
-      <div className="mb-4 flex flex-wrap gap-2 text-xs text-slate-300">
-        {[
-          "basic",
-          "insights",
-          "publish",
-          "delete",
-          "search",
-          "locations",
-          "mentions",
-          "replies",
-          "discovery",
-          "share to Instagram",
-        ].map((scope) => (
-          <span key={scope} className="rounded-full border border-white/10 bg-white/5 px-2 py-1">
-            {scope}
-          </span>
+      <div className="mb-4 flex flex-wrap gap-2 rounded-lg bg-black/20 p-1">
+        {workflowModes.map((item) => (
+          <button
+            key={item}
+            type="button"
+            onClick={() => setMode(item)}
+            className={`rounded-md px-3 py-2 text-sm transition ${
+              mode === item ? "bg-violet-500 text-white" : "text-slate-300 hover:bg-white/10"
+            }`}
+          >
+            {item}
+          </button>
         ))}
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-2">
-        <form onSubmit={submitPublish} className="space-y-3">
-          <div className="flex items-center justify-between gap-3">
-            <h3 className="text-sm font-medium uppercase text-slate-300">Publish</h3>
-            <span className="text-xs text-slate-400">{publishText.length}/500</span>
-          </div>
-          <textarea
-            value={publishText}
-            onChange={(event) => setPublishText(event.target.value.slice(0, 500))}
-            className={`${inputClass} min-h-28 resize-y`}
-            placeholder="Threads post text"
-          />
-          <div className="grid gap-3 sm:grid-cols-3">
-            <select value={mediaType} onChange={(event) => setMediaType(event.target.value)} className={inputClass}>
-              <option value="TEXT">Text</option>
-              <option value="IMAGE">Image</option>
-              <option value="VIDEO">Video</option>
-            </select>
-            <select value={replyControl} onChange={(event) => setReplyControl(event.target.value)} className={inputClass}>
-              <option value="everyone">Everyone</option>
-              <option value="followers">Followers</option>
-              <option value="mentioned_only">Mentioned only</option>
-            </select>
-            <label className="flex items-center gap-2 rounded-md border border-white/10 bg-black/20 px-3 py-2 text-sm text-slate-200">
-              <input
-                type="checkbox"
-                checked={shareToInstagram}
-                onChange={(event) => setShareToInstagram(event.target.checked)}
-              />
-              Instagram
-            </label>
+      {platform === "Instagram" && (
+        <div className="mb-4 grid gap-2 sm:grid-cols-2">
+          <select value={profileGroup} onChange={(event) => setProfileGroup(event.target.value as InstagramProfileGroup)} className={inputClass}>
+            <option value="personal">Personal Instagram</option>
+            <option value="newglory">New Glory Instagram</option>
+          </select>
+          <p className="rounded-md bg-white/5 px-3 py-2 text-sm text-slate-300">
+            {instagramProfiles.find((profile) => profile.profileGroup === profileGroup)?.username
+              ? `@${instagramProfiles.find((profile) => profile.profileGroup === profileGroup)?.username}`
+              : "Selected account"}
+          </p>
+        </div>
+      )}
+
+      {mode === "Post" && (
+        <form onSubmit={submitPost} className="grid gap-3 lg:grid-cols-[1.1fr_0.9fr]">
+          <div className="space-y-3">
+            <textarea
+              value={platform === "Threads" ? text : caption}
+              onChange={(event) =>
+                platform === "Threads"
+                  ? setText(event.target.value.slice(0, 500))
+                  : setCaption(event.target.value.slice(0, 2200))
+              }
+              className={`${inputClass} min-h-40 resize-y`}
+              placeholder={platform === "Threads" ? "Write a Threads post..." : "Write an Instagram caption..."}
+            />
+            <button disabled={!connected || busyAction === "publish"} className={buttonClass}>
+              {busyAction === "publish" ? "Publishing..." : `Publish to ${platform}`}
+            </button>
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
+            <select value={mediaType} onChange={(event) => setMediaType(event.target.value)} className={inputClass}>
+              {platform === "Threads" ? (
+                <>
+                  <option value="TEXT">Text</option>
+                  <option value="IMAGE">Image</option>
+                  <option value="VIDEO">Video</option>
+                </>
+              ) : (
+                <>
+                  <option value="IMAGE">Image</option>
+                  <option value="VIDEO">Video</option>
+                  <option value="REELS">Reel</option>
+                  <option value="STORIES">Story</option>
+                </>
+              )}
+            </select>
             <input value={mediaUrl} onChange={(event) => setMediaUrl(event.target.value)} className={inputClass} placeholder="Public media URL" />
             <input value={altText} onChange={(event) => setAltText(event.target.value)} className={inputClass} placeholder="Alt text" />
-            <input value={replyToId} onChange={(event) => setReplyToId(event.target.value)} className={inputClass} placeholder="Reply to post ID" />
-            <input value={topicTag} onChange={(event) => setTopicTag(event.target.value)} className={inputClass} placeholder="Topic tag" />
-            <input value={locationId} onChange={(event) => setLocationId(event.target.value)} className={inputClass} placeholder="Location ID" />
-          </div>
-          <button disabled={!connected || busyAction === "publish"} className={buttonClass}>
-            {busyAction === "publish" ? "Publishing..." : "Publish to Threads"}
-          </button>
-        </form>
-
-        <div className="space-y-4">
-          <section className="space-y-3">
-            <h3 className="text-sm font-medium uppercase text-slate-300">Discovery</h3>
-            <div className="grid gap-3 sm:grid-cols-[1fr_auto_auto]">
-              <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} className={inputClass} placeholder="Keyword" />
-              <select value={searchType} onChange={(event) => setSearchType(event.target.value)} className={inputClass}>
-                <option value="TOP">Top</option>
-                <option value="RECENT">Recent</option>
-              </select>
-              <button
-                type="button"
-                disabled={!connected || busyAction === "search"}
-                onClick={() => void runAction("search", { query: searchQuery, searchType })}
-                className={secondaryButtonClass}
-              >
-                Search
-              </button>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-[1fr_auto_auto]">
-              <input
-                value={profileUsername}
-                onChange={(event) => setProfileUsername(event.target.value)}
-                className={inputClass}
-                placeholder="Threads username"
-              />
-              <button
-                type="button"
-                disabled={!connected || busyAction === "profileLookup"}
-                onClick={() => void runAction("profileLookup", { username: profileUsername })}
-                className={secondaryButtonClass}
-              >
-                Profile
-              </button>
-              <button
-                type="button"
-                disabled={!connected || busyAction === "profilePosts"}
-                onClick={() => void runAction("profilePosts", { username: profileUsername })}
-                className={secondaryButtonClass}
-              >
-                Posts
-              </button>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
-              <input value={locationQuery} onChange={(event) => setLocationQuery(event.target.value)} className={inputClass} placeholder="Location query" />
-              <button
-                type="button"
-                disabled={!connected || busyAction === "locationSearch"}
-                onClick={() => void runAction("locationSearch", { query: locationQuery })}
-                className={secondaryButtonClass}
-              >
-                Locations
-              </button>
-            </div>
-          </section>
-
-          <section className="space-y-3">
-            <h3 className="text-sm font-medium uppercase text-slate-300">Replies and Moderation</h3>
-            <div className="grid gap-3 sm:grid-cols-[1fr_auto_auto]">
-              <input value={threadId} onChange={(event) => setThreadId(event.target.value)} className={inputClass} placeholder="Post ID" />
-              <button
-                type="button"
-                disabled={!connected || busyAction === "replies"}
-                onClick={() => void runAction("replies", { threadId })}
-                className={secondaryButtonClass}
-              >
-                Replies
-              </button>
-              <button
-                type="button"
-                disabled={!connected || busyAction === "conversation"}
-                onClick={() => void runAction("conversation", { threadId })}
-                className={secondaryButtonClass}
-              >
-                Thread
-              </button>
-            </div>
-            <textarea
-              value={replyText}
-              onChange={(event) => setReplyText(event.target.value.slice(0, 500))}
-              className={`${inputClass} min-h-20 resize-y`}
-              placeholder="Reply text"
+            <input
+              value={targetId}
+              onChange={(event) => setTargetId(event.target.value)}
+              className={inputClass}
+              placeholder={platform === "Threads" ? "Reply to post ID" : "Media/comment ID"}
             />
-            <div className="grid gap-3 sm:grid-cols-[1fr_auto_auto_auto]">
-              <input value={replyThreadId} onChange={(event) => setReplyThreadId(event.target.value)} className={inputClass} placeholder="Reply ID" />
-              <button
-                type="button"
-                disabled={!connected || busyAction === "publish"}
-                onClick={() =>
-                  void runAction("publish", {
-                    text: replyText,
-                    mediaType: "TEXT",
-                    replyToId: replyThreadId || threadId,
-                  })
-                }
-                className={secondaryButtonClass}
-              >
-                Reply
-              </button>
-              <button
-                type="button"
-                disabled={!connected || busyAction === "manageReply"}
-                onClick={() => void runAction("manageReply", { replyThreadId, hide: true })}
-                className={secondaryButtonClass}
-              >
-                Hide
-              </button>
-              <button
-                type="button"
-                disabled={!connected || busyAction === "manageReply"}
-                onClick={() => void runAction("manageReply", { replyThreadId, hide: false })}
-                className={secondaryButtonClass}
-              >
-                Unhide
-              </button>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                disabled={!connected || busyAction === "mentions"}
-                onClick={() => void runAction("mentions", {})}
-                className={secondaryButtonClass}
-              >
-                Mentions
-              </button>
-              <button
-                type="button"
-                disabled={!connected || busyAction === "managePendingReply"}
-                onClick={() => void runAction("managePendingReply", { replyThreadId, approve: true })}
-                className={secondaryButtonClass}
-              >
-                Approve
-              </button>
-              <button
-                type="button"
-                disabled={!connected || busyAction === "managePendingReply"}
-                onClick={() => void runAction("managePendingReply", { replyThreadId, approve: false })}
-                className={secondaryButtonClass}
-              >
-                Ignore
-              </button>
-              <button
-                type="button"
-                disabled={!connected || busyAction === "delete"}
-                onClick={() => void runAction("delete", { threadId })}
-                className="rounded-md bg-red-500/80 px-3 py-2 text-sm font-medium text-white transition hover:bg-red-400 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Delete post
-              </button>
-            </div>
-          </section>
+            <input value={secondaryId} onChange={(event) => setSecondaryId(event.target.value)} className={inputClass} placeholder="Location ID" />
+            <input
+              value={tagValue}
+              onChange={(event) => setTagValue(event.target.value)}
+              className={inputClass}
+              placeholder={platform === "Threads" ? "Topic tag" : "User/product/collab tags JSON"}
+            />
+            {platform === "Threads" && (
+              <label className="flex items-center gap-2 rounded-md border border-white/10 bg-black/20 px-3 py-2 text-sm text-slate-200">
+                <input
+                  type="checkbox"
+                  checked={shareToInstagram}
+                  onChange={(event) => setShareToInstagram(event.target.checked)}
+                />
+                Share to Instagram
+              </label>
+            )}
+          </div>
+        </form>
+      )}
+
+      {mode === "Inbox" && (
+        <div className="grid gap-3 lg:grid-cols-[1fr_1fr]">
+          <div className="space-y-3">
+            <input value={targetId} onChange={(event) => setTargetId(event.target.value)} className={inputClass} placeholder={platform === "Threads" ? "Post ID" : "Media ID"} />
+            <input value={secondaryId} onChange={(event) => setSecondaryId(event.target.value)} className={inputClass} placeholder={platform === "Threads" ? "Reply ID" : "Comment or recipient ID"} />
+            <textarea value={text} onChange={(event) => setText(event.target.value.slice(0, 1000))} className={`${inputClass} min-h-24 resize-y`} placeholder="Reply or message..." />
+          </div>
+          <div className="flex flex-wrap content-start gap-2">
+            {platform === "Threads" ? (
+              <>
+                <button disabled={!connected || busyAction === "replies"} onClick={() => void runAction("replies", { threadId: targetId })} className={secondaryButtonClass}>Load replies</button>
+                <button disabled={!connected || busyAction === "conversation"} onClick={() => void runAction("conversation", { threadId: targetId })} className={secondaryButtonClass}>Conversation</button>
+                <button disabled={!connected || busyAction === "publish"} onClick={() => void runAction("publish", { text, mediaType: "TEXT", replyToId: secondaryId || targetId })} className={secondaryButtonClass}>Reply</button>
+                <button disabled={!connected || busyAction === "mentions"} onClick={() => void runAction("mentions")} className={secondaryButtonClass}>Mentions</button>
+                <button disabled={!connected || busyAction === "manageReply"} onClick={() => void runAction("manageReply", { replyThreadId: secondaryId, hide: true })} className={secondaryButtonClass}>Hide</button>
+                <button disabled={!connected || busyAction === "manageReply"} onClick={() => void runAction("manageReply", { replyThreadId: secondaryId, hide: false })} className={secondaryButtonClass}>Unhide</button>
+                <button disabled={!connected || busyAction === "delete"} onClick={() => void runAction("delete", { threadId: targetId })} className="rounded-md bg-red-500/80 px-3 py-2 text-sm font-medium text-white hover:bg-red-400 disabled:opacity-50">Delete</button>
+              </>
+            ) : (
+              <>
+                <button disabled={!connected || busyAction === "comments"} onClick={() => void runAction("comments", { mediaId: targetId })} className={secondaryButtonClass}>Load comments</button>
+                <button disabled={!connected || busyAction === "replyComment"} onClick={() => void runAction("replyComment", { commentId: secondaryId, text })} className={secondaryButtonClass}>Reply comment</button>
+                <button disabled={!connected || busyAction === "manageComment"} onClick={() => void runAction("manageComment", { commentId: secondaryId, hide: true })} className={secondaryButtonClass}>Hide</button>
+                <button disabled={!connected || busyAction === "manageComment"} onClick={() => void runAction("manageComment", { commentId: secondaryId, hide: false })} className={secondaryButtonClass}>Unhide</button>
+                <button disabled={!connected || busyAction === "deleteComment"} onClick={() => void runAction("deleteComment", { commentId: secondaryId })} className="rounded-md bg-red-500/80 px-3 py-2 text-sm font-medium text-white hover:bg-red-400 disabled:opacity-50">Delete comment</button>
+                <button disabled={!connected || busyAction === "conversations"} onClick={() => void runAction("conversations")} className={secondaryButtonClass}>Messages</button>
+                <button disabled={!connected || busyAction === "sendMessage"} onClick={() => void runAction("sendMessage", { recipientId: secondaryId, text })} className={secondaryButtonClass}>Send DM</button>
+                <button disabled={!connected || busyAction === "mentions"} onClick={() => void runAction("mentions")} className={secondaryButtonClass}>Mentions</button>
+              </>
+            )}
+          </div>
         </div>
-      </div>
+      )}
+
+      {mode === "Discovery" && (
+        <div className="grid gap-3 lg:grid-cols-[1fr_auto]">
+          <input value={query} onChange={(event) => setQuery(event.target.value)} className={inputClass} placeholder={platform === "Threads" ? "Keyword, username, or location" : "Hashtag, catalog, or account query"} />
+          <div className="flex flex-wrap gap-2">
+            {platform === "Threads" ? (
+              <>
+                <button disabled={!connected || busyAction === "search"} onClick={() => void runAction("search", { query, searchType: "TOP" })} className={secondaryButtonClass}>Search</button>
+                <button disabled={!connected || busyAction === "profileLookup"} onClick={() => void runAction("profileLookup", { username: query })} className={secondaryButtonClass}>Profile</button>
+                <button disabled={!connected || busyAction === "profilePosts"} onClick={() => void runAction("profilePosts", { username: query })} className={secondaryButtonClass}>Posts</button>
+                <button disabled={!connected || busyAction === "locationSearch"} onClick={() => void runAction("locationSearch", { query })} className={secondaryButtonClass}>Locations</button>
+              </>
+            ) : (
+              <>
+                <button disabled={!connected || busyAction === "publicSearch"} onClick={() => void runAction("publicSearch", { query })} className={secondaryButtonClass}>Hashtag search</button>
+                <button disabled={!connected || busyAction === "upcomingEvents"} onClick={() => void runAction("upcomingEvents")} className={secondaryButtonClass}>Upcoming events</button>
+                <button disabled={!connected || busyAction === "catalogProducts"} onClick={() => void runAction("catalogProducts", { query })} className={secondaryButtonClass}>Catalogs</button>
+                <button disabled={!connected || busyAction === "adAccounts"} onClick={() => void runAction("adAccounts")} className={secondaryButtonClass}>Ads</button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {mode === "Settings" && (
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-sm text-slate-300">
+            {platform === "Instagram"
+              ? "Enabled scopes include insights, comments, messages, content publishing, events, shopping tags, branded content, public content access, Pages, business, ads, catalog, human agent, public profile, and email."
+              : "Enabled scopes include basic profile, insights, content publishing, delete, keyword search, location tags, mentions, replies, discovery, and sharing to Instagram."}
+          </div>
+          <a
+            href={platform === "Threads" ? "/api/connect/threads" : "/api/connect/instagram?profile=personal"}
+            className="flex items-center justify-center rounded-lg bg-white/10 px-4 py-3 text-sm font-medium hover:bg-white/15"
+          >
+            Reconnect {platform}
+          </a>
+        </div>
+      )}
 
       {result && (
         <div className="mt-5">
           <div className={`mb-2 rounded-md px-3 py-2 text-sm ${result.ok ? "bg-emerald-500/15 text-emerald-100" : "bg-red-500/15 text-red-100"}`}>
-            {result.ok ? "Threads action complete." : result.message ?? "Threads action failed."}
+            {result.ok ? `${platform} action complete.` : result.message ?? `${platform} action failed.`}
           </div>
           <pre className="max-h-72 overflow-auto rounded-md bg-black/40 p-3 text-xs text-slate-200">
             {JSON.stringify(result, null, 2)}
@@ -1918,7 +1783,7 @@ function StatisticsTab() {
   const totalFollowers = instagramProfiles.reduce(
     (sum, profile) => sum + (profile.followersCount ?? 0),
     0
-  );
+  ) + (liveMetrics.threads?.insights?.followersCount ?? 0);
   const insightViews = sumProfileInsights(instagramProfiles, "views");
   const postViews = posts.reduce(
     (sum, post) => sum + (getPostViews(post) ?? 0),
@@ -2170,8 +2035,6 @@ function StatisticsTab() {
         </PremiumCard>
       </div>
 
-      <ThreadsActionPanel connected={Boolean(threadsProfile)} />
-
       <div className="grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
         <PremiumCard>
           <div className="mb-4 flex items-center justify-between gap-3">
@@ -2401,29 +2264,506 @@ function StatisticsTab() {
   );
 }
 
+function InstagramTab() {
+  const liveMetrics = useLiveMetrics();
+  const profiles = liveMetrics.instagram?.profiles ?? [];
+  const contentItems = profiles
+    .flatMap((profile) =>
+      getProfileContent(profile).map((media) => ({
+        ...media,
+        profile,
+      }))
+    )
+    .sort((a, b) => {
+      const aTime = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+      const bTime = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+      return bTime - aTime;
+    });
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-5">
+      <SocialWorkflowPanel platform="Instagram" connected={profiles.length > 0} instagramProfiles={profiles} />
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        {profiles.map((profile) => (
+          <AccountStatCard
+            key={profile.profileGroup}
+            group={getProfileLabel(profile)}
+            platform="Instagram"
+            account={getProfileDisplayName(profile, "Instagram account")}
+            status="Live"
+            avatarUrl={profile.profilePictureUrl}
+            href={profile.username ? `https://www.instagram.com/${profile.username}/` : undefined}
+            stats={[
+              ["Followers", formatStat(profile.followersCount)],
+              ["Following", formatStat(profile.followsCount)],
+              ["Media", formatStat(profile.mediaCount)],
+              ["Views", formatStat(profile.insights?.views)],
+              ["Reach", formatStat(profile.insights?.reach)],
+              ["Interactions", formatStat(profile.insights?.interactions)],
+              ["New followers", formatStat(profile.insights?.follows)],
+              ["Stories", formatStat(profile.contentSummary?.activeStories)],
+              ["Contributor", formatStat(profile.contentSummary?.collaboratorMedia)],
+            ]}
+            posts={getRegularPosts(profile)}
+            stories={getStories(profile)}
+            contributorPosts={getContributorPosts(profile)}
+            postsMessage={profile.mediaMessage}
+            contributorMessage={profile.contributorMessage}
+            insightsMessage={profile.insightsMessage}
+          />
+        ))}
+      </div>
+
+      <PremiumCard>
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 className="text-lg font-medium">Latest Instagram Activity</h2>
+          <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-slate-300">
+            {contentItems.length} items
+          </span>
+        </div>
+        {contentItems.length ? (
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {contentItems.slice(0, 8).map((item) => (
+              <div key={`${item.profile.profileGroup}-${item.id}`} className="rounded-lg border border-white/10 bg-black/20 p-3">
+                <div className="mb-2 flex items-center gap-2">
+                  <ProfileAvatar imageUrl={item.profile.profilePictureUrl} label={item.profile.username ?? getProfileLabel(item.profile)} />
+                  <div>
+                    <p className="text-xs text-slate-400">{getProfileLabel(item.profile)}</p>
+                    <p className="text-sm font-medium">{getProfileDisplayName(item.profile, "Instagram")}</p>
+                  </div>
+                </div>
+                <InstagramPostPreview media={item} compact />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-slate-300">Connect Instagram accounts to show platform activity.</p>
+        )}
+      </PremiumCard>
+    </motion.div>
+  );
+}
+
+function ThreadsTab() {
+  const liveMetrics = useLiveMetrics();
+  const profile = liveMetrics.threads?.profile;
+  const posts = liveMetrics.threads?.posts ?? [];
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-5">
+      <SocialWorkflowPanel platform="Threads" connected={Boolean(profile)} />
+      <div className="grid gap-4 lg:grid-cols-[0.8fr_1.2fr]">
+        <AccountStatCard
+          group="Personal"
+          platform="Threads"
+          account={profile?.username ? `@${profile.username}` : connectedProfiles.personal.threads}
+          status={profile ? "Live" : "Connect Threads"}
+          avatarUrl={profile?.profilePictureUrl}
+          href={profile?.username ? `https://www.threads.net/@${profile.username}` : undefined}
+          actionHref={profile ? undefined : "/api/connect/threads"}
+          actionLabel="Connect Threads"
+          stats={[
+            ["Followers", formatStat(liveMetrics.threads?.insights?.followersCount)],
+            ["Views", formatStat(liveMetrics.threads?.insights?.views)],
+            ["Likes", formatStat(liveMetrics.threads?.insights?.likes)],
+            ["Replies", formatStat(liveMetrics.threads?.insights?.replies)],
+            ["Reposts", formatStat(liveMetrics.threads?.insights?.reposts)],
+            ["Quotes", formatStat(liveMetrics.threads?.insights?.quotes)],
+          ]}
+          insightsMessage={liveMetrics.threads?.insightsMessage}
+        />
+        <PremiumCard>
+          <h2 className="mb-4 text-lg font-medium">Latest Threads Activity</h2>
+          {posts.length ? (
+            <div className="grid gap-3 md:grid-cols-2">
+              {posts.slice(0, 6).map((post) => (
+                <ExternalPostPreview key={post.id} post={post} platform="Threads" />
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-slate-300">Connect Threads to show recent posts and replies.</p>
+          )}
+          {liveMetrics.threads?.postsMessage && (
+            <p className="mt-3 text-xs text-amber-200">{liveMetrics.threads.postsMessage}</p>
+          )}
+        </PremiumCard>
+      </div>
+    </motion.div>
+  );
+}
+
+function FacebookTab() {
+  const liveMetrics = useLiveMetrics();
+  const pages = liveMetrics.meta?.metrics ?? [];
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-5">
+      <PlatformIntro title="Facebook" connected={pages.length > 0} href="/api/connect/meta" />
+      <div className="grid gap-4 lg:grid-cols-2">
+        {pages.map((page) => (
+          <AccountStatCard
+            key={page.pageId}
+            group={page.pageName.toLowerCase().includes("new glory") ? "New Glory" : "Personal"}
+            platform="Facebook"
+            account={page.pageName}
+            status="Live"
+            stats={[
+              ["Followers", formatStat(page.fbFollowersCount ?? page.fbFollowerSnapshot)],
+              ["Fans", formatStat(page.fbFanCount)],
+              ["Views", formatStat(page.fbViews)],
+              ["Impressions", formatStat(page.fbImpressions)],
+              ["Engagements", formatStat(page.fbPostEngagements)],
+              ["New followers", formatStat(page.fbNewFollowers)],
+            ]}
+            externalPosts={page.fbPosts}
+            externalPostsPlatform="Facebook"
+            postsMessage={page.fbPostsMessage}
+            insightsMessage={page.fbInsightsMessage}
+          />
+        ))}
+      </div>
+    </motion.div>
+  );
+}
+
+function LinkedInTab() {
+  const liveMetrics = useLiveMetrics();
+  const profile = liveMetrics.linkedin?.identity?.personalProfile;
+  const organization = findLinkedInOrganization(liveMetrics.linkedin?.identity?.organizations);
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-5">
+      <PlatformIntro title="LinkedIn" connected={Boolean(profile || organization)} href="/api/connect/linkedin" />
+      <div className="grid gap-4 lg:grid-cols-2">
+        <AccountStatCard
+          group="Personal"
+          platform="LinkedIn"
+          account={profile?.name ?? "Thijs Wijma"}
+          status={profile ? "Connected" : "Connect LinkedIn"}
+          href={connectedProfiles.personal.linkedin}
+          actionHref={profile ? undefined : "/api/connect/linkedin"}
+          actionLabel="Connect LinkedIn"
+          stats={[
+            ["Profile ID", profile?.sub ?? "n/a"],
+            ["Email", profile?.email ?? "n/a"],
+            ["Followers", formatStat(profile?.followersCount)],
+            ["Connections", formatStat(profile?.connectionsCount)],
+          ]}
+          insightsMessage={profile?.message ?? liveMetrics.linkedin?.message}
+        />
+        <AccountStatCard
+          group="New Glory"
+          platform="LinkedIn"
+          account={organization?.name ?? "New Glory Running Collective"}
+          status={organization ? "Connected" : "Connect LinkedIn admin"}
+          href={connectedProfiles.newGlory.linkedin}
+          actionHref={organization ? undefined : "/api/connect/linkedin?mode=organization"}
+          actionLabel="Connect LinkedIn admin"
+          stats={[
+            ["Followers", formatStat(organization?.followersCount)],
+            ["Impressions", formatStat(organization?.impressions)],
+            ["Clicks", formatStat(organization?.clicks)],
+            ["Likes", formatStat(organization?.likes)],
+            ["Comments", formatStat(organization?.comments)],
+            ["Shares", formatStat(organization?.shares)],
+            ["Engagement rate", formatPercent(organization?.engagementRate)],
+          ]}
+          insightsMessage={organization?.message}
+        />
+      </div>
+    </motion.div>
+  );
+}
+
+function TikTokTab() {
+  const liveMetrics = useLiveMetrics();
+  const user = liveMetrics.tiktok?.profile?.data?.user;
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-5">
+      <PlatformIntro title="TikTok" connected={Boolean(user)} href="/api/connect/tiktok" />
+      <AccountStatCard
+        group="Personal"
+        platform="TikTok"
+        account={user?.display_name ?? connectedProfiles.personal.tiktok}
+        status={user ? "Connected" : "Connect TikTok"}
+        actionHref={user ? undefined : "/api/connect/tiktok"}
+        actionLabel="Connect TikTok"
+        avatarUrl={user?.avatar_url}
+        stats={[
+          ["Open ID", user?.open_id ?? "n/a"],
+          ["Videos", liveMetrics.tiktok?.videos?.videos?.length?.toString() ?? liveMetrics.tiktok?.videosMessage ?? "n/a"],
+          ["Scopes", liveMetrics.tiktok?.scope ?? "n/a"],
+        ]}
+        insightsMessage={liveMetrics.tiktok?.message}
+      />
+    </motion.div>
+  );
+}
+
+function PlatformIntro({
+  title,
+  connected,
+  href,
+}: {
+  title: string;
+  connected: boolean;
+  href: string;
+}) {
+  return (
+    <PremiumCard>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-medium">{title}</h2>
+          <p className="mt-1 text-sm text-slate-300">
+            {connected ? "Live platform data is available." : `Connect ${title} to show live data and actions.`}
+          </p>
+        </div>
+        <a href={href} className="rounded-md bg-violet-500 px-4 py-2 text-sm font-medium hover:bg-violet-400">
+          {connected ? "Reconnect" : "Connect"}
+        </a>
+      </div>
+    </PremiumCard>
+  );
+}
+
 function PlanningTab() {
+  const [tasks, setTasks] = useState(initialTasks);
   const [items, setItems] = useState(initialPlan);
-  const [draggingId, setDraggingId] = useState<string | null>(null);
-  const days = useMemo(() => Array.from({ length: 30 }, (_, i) => `2026-05-${String(i + 1).padStart(2, "0")}`), []);
+  const [draggingItem, setDraggingItem] = useState<PlannerDragItem | null>(null);
+  const [newTask, setNewTask] = useState("");
+  const [newScheduled, setNewScheduled] = useState({
+    title: "",
+    platform: "Instagram",
+    date: "2026-05-07",
+    time: "09:00",
+  });
+  const days = useMemo(() => {
+    const year = 2026;
+    const monthIndex = 4;
+    const month = String(monthIndex + 1).padStart(2, "0");
+    const totalDays = new Date(year, monthIndex + 1, 0).getDate();
+    return Array.from({ length: totalDays }, (_, index) =>
+      `${year}-${month}-${String(index + 1).padStart(2, "0")}`
+    );
+  }, []);
+
+  const plannedItems = items.filter((item) => item.status !== "Draft");
+
+  const addTask = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const text = newTask.trim();
+    if (!text) return;
+
+    setTasks((prev) => [
+      ...prev,
+      {
+        id: createClientId("task"),
+        text,
+        priority: "Medium",
+        done: false,
+        source: "Manual",
+      },
+    ]);
+    setNewTask("");
+  };
+
+  const addScheduled = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const title = newScheduled.title.trim();
+    if (!title) return;
+
+    setItems((prev) => [
+      ...prev,
+      {
+        id: createClientId("plan"),
+        title,
+        platform: newScheduled.platform,
+        date: newScheduled.date,
+        time: newScheduled.time,
+        status: "Draft",
+      },
+    ]);
+    setNewScheduled((prev) => ({ ...prev, title: "" }));
+  };
+
+  const deleteTask = (id: string) => {
+    setTasks((prev) => prev.filter((task) => task.id !== id));
+  };
+
+  const deleteScheduled = (id: string) => {
+    setItems((prev) => prev.filter((item) => item.id !== id));
+  };
 
   const onDropDay = (date: string) => {
-    if (!draggingId) return;
-    setItems((prev) => prev.map((item) => (item.id === draggingId ? { ...item, date } : item)));
-    setDraggingId(null);
+    if (!draggingItem) return;
+
+    if (draggingItem.type === "scheduled") {
+      setItems((prev) =>
+        prev.map((item) =>
+          item.id === draggingItem.id ? { ...item, date, status: "Scheduled" } : item
+        )
+      );
+    }
+
+    if (draggingItem.type === "task") {
+      const task = tasks.find((item) => item.id === draggingItem.id);
+      if (task) {
+        setItems((prev) => [
+          ...prev,
+          {
+            id: createClientId("plan"),
+            title: task.text,
+            platform: "Task",
+            date,
+            time: "09:00",
+            status: "Scheduled",
+          },
+        ]);
+      }
+    }
+
+    setDraggingItem(null);
   };
 
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
-      <PremiumCard>
-        <h2 className="mb-3 text-lg font-medium">Scheduled List</h2>
-        <ul className="space-y-2 text-sm">
-          {items.map((item) => (
-            <li key={item.id} draggable onDragStart={() => setDraggingId(item.id)} className="cursor-move rounded-lg border border-white/10 bg-black/20 px-3 py-2">
-              {item.date} · {item.time} · {item.platform} · {item.title} · {item.status}
-            </li>
-          ))}
-        </ul>
-      </PremiumCard>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <PremiumCard>
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-medium">To-do List</h2>
+              <p className="mt-1 text-sm text-slate-300">Drag tasks onto the calendar to plan them without removing them from this list.</p>
+            </div>
+            <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-slate-300">
+              {tasks.length} tasks
+            </span>
+          </div>
+
+          <form onSubmit={addTask} className="mb-4 flex gap-2">
+            <input
+              value={newTask}
+              onChange={(event) => setNewTask(event.target.value)}
+              className="min-w-0 flex-1 rounded-md border border-white/10 bg-black/20 px-3 py-2 text-sm text-slate-100 outline-none focus:border-violet-300"
+              placeholder="Add a task..."
+            />
+            <button className="rounded-md bg-violet-500 px-4 py-2 text-sm font-medium hover:bg-violet-400">
+              Add
+            </button>
+          </form>
+
+          <ul className="space-y-2 text-sm">
+            {tasks.map((task) => (
+              <li
+                key={task.id}
+                draggable
+                onDragStart={() => setDraggingItem({ type: "task", id: task.id })}
+                className="cursor-move rounded-lg border border-white/10 bg-black/20 px-3 py-2"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <label className="flex min-w-0 items-start gap-2">
+                    <input
+                      type="checkbox"
+                      checked={task.done}
+                      onChange={() =>
+                        setTasks((prev) =>
+                          prev.map((item) =>
+                            item.id === task.id ? { ...item, done: !item.done } : item
+                          )
+                        )
+                      }
+                      className="mt-1"
+                    />
+                    <span className={task.done ? "text-slate-500 line-through" : "text-slate-100"}>
+                      {task.text}
+                    </span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => deleteTask(task.id)}
+                    className="shrink-0 rounded-md bg-white/10 px-2 py-1 text-xs text-slate-200 hover:bg-red-500/30"
+                  >
+                    Delete
+                  </button>
+                </div>
+                <div className="mt-2 flex gap-2 text-[11px] text-slate-400">
+                  <span className="rounded-full bg-white/10 px-2 py-1">{task.priority}</span>
+                  <span className="rounded-full bg-white/10 px-2 py-1">{task.source}</span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </PremiumCard>
+
+        <PremiumCard>
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-medium">Scheduled List</h2>
+              <p className="mt-1 text-sm text-slate-300">Add draft content, then drag it onto the calendar when it is planned.</p>
+            </div>
+            <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-slate-300">
+              {items.length} items
+            </span>
+          </div>
+
+          <form onSubmit={addScheduled} className="mb-4 grid gap-2 sm:grid-cols-[1fr_auto_auto_auto]">
+            <input
+              value={newScheduled.title}
+              onChange={(event) => setNewScheduled((prev) => ({ ...prev, title: event.target.value }))}
+              className="rounded-md border border-white/10 bg-black/20 px-3 py-2 text-sm text-slate-100 outline-none focus:border-violet-300"
+              placeholder="Content title..."
+            />
+            <select
+              value={newScheduled.platform}
+              onChange={(event) => setNewScheduled((prev) => ({ ...prev, platform: event.target.value }))}
+              className="rounded-md border border-white/10 bg-black/20 px-3 py-2 text-sm text-slate-100 outline-none focus:border-violet-300"
+            >
+              <option>Instagram</option>
+              <option>Threads</option>
+              <option>Facebook</option>
+              <option>LinkedIn</option>
+              <option>TikTok</option>
+            </select>
+            <input
+              type="time"
+              value={newScheduled.time}
+              onChange={(event) => setNewScheduled((prev) => ({ ...prev, time: event.target.value }))}
+              className="rounded-md border border-white/10 bg-black/20 px-3 py-2 text-sm text-slate-100 outline-none focus:border-violet-300"
+            />
+            <button className="rounded-md bg-violet-500 px-4 py-2 text-sm font-medium hover:bg-violet-400">
+              Add
+            </button>
+          </form>
+
+          <ul className="space-y-2 text-sm">
+            {items.map((item) => (
+              <li
+                key={item.id}
+                draggable
+                onDragStart={() => setDraggingItem({ type: "scheduled", id: item.id })}
+                className="cursor-move rounded-lg border border-white/10 bg-black/20 px-3 py-2"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate font-medium">{item.title}</p>
+                    <p className="mt-1 text-xs text-slate-400">
+                      {item.platform} · {item.status === "Draft" ? "Not on calendar yet" : `${item.date} at ${item.time}`}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => deleteScheduled(item.id)}
+                    className="shrink-0 rounded-md bg-white/10 px-2 py-1 text-xs text-slate-200 hover:bg-red-500/30"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </PremiumCard>
+      </div>
 
       <PremiumCard>
         <h2 className="mb-3 text-lg font-medium">Monthly Calendar (Drag & Drop)</h2>
@@ -2431,12 +2771,13 @@ function PlanningTab() {
           {days.map((day) => (
             <div key={day} onDragOver={(e) => e.preventDefault()} onDrop={() => onDropDay(day)} className="min-h-16 rounded-lg border border-white/10 bg-black/20 p-2">
               <p className="text-slate-400">{day.slice(-2)}</p>
-              {items
+              {plannedItems
                 .filter((i) => i.date === day)
                 .map((i) => (
-                  <p key={i.id} className="mt-1 rounded bg-violet-500/30 px-1">
-                    {i.platform}
-                  </p>
+                  <div key={i.id} className="mt-1 rounded bg-violet-500/30 px-1 py-1">
+                    <p className="truncate font-medium">{i.platform}</p>
+                    <p className="truncate text-[10px] text-slate-200">{i.title}</p>
+                  </div>
                 ))}
             </div>
           ))}

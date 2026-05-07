@@ -449,7 +449,7 @@ async function fetchMetaMediaCollection(
       ok: false,
       media: [],
       message:
-        "Contributor posts need the Instagram account to be linked to a connected Meta/Facebook Page.",
+        "Contributor posts need the Instagram account to be linked to its managing Page.",
     };
   }
 
@@ -475,7 +475,7 @@ async function fetchMetaMediaCollection(
     media: [],
     message:
       fallback.data.error?.message ??
-      "Contributor posts need Meta Instagram tagged-media access for this account.",
+      "Contributor posts need tagged-media access for this Instagram account.",
   };
 }
 
@@ -861,8 +861,8 @@ export async function GET() {
         collaboratorMedia > 0
           ? null
           : metaPage
-            ? "No contributor posts were returned by Meta for this account. If a collaboration is missing, reconnect Meta/Facebook with the Page linked to this Instagram account and make sure the app has Instagram tagged-media access."
-            : "Contributor posts need Meta connected for this Instagram account. Connect Meta/Facebook with the Page that owns this Instagram account, then reconnect Instagram.";
+            ? "No contributor posts were returned for this account yet. If a collaboration is missing, confirm the managing Page has tagged-media access for this Instagram account."
+            : "Contributor posts need the Page that manages this Instagram account to be connected.";
 
       return {
         cookieProfile: toStoredProfile(refreshedProfile),
