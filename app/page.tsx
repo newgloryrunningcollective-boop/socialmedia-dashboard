@@ -1,6 +1,16 @@
 "use client";
 
-import { use, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import {
+  use,
+  useEffect,
+  useMemo,
+  useState,
+  type ChangeEvent,
+  type Dispatch,
+  type FormEvent,
+  type ReactNode,
+  type SetStateAction,
+} from "react";
 import { motion } from "framer-motion";
 import {
   Bar,
@@ -13,7 +23,7 @@ import {
   YAxis,
 } from "recharts";
 
-type Tab = "Home" | "Statistics" | "Planning" | "Instagram" | "Threads" | "Facebook" | "LinkedIn" | "TikTok";
+type Tab = "Home" | "Statistics" | "Planning" | "Instagram" | "Threads" | "Facebook" | "LinkedIn" | "TikTok" | "WhatsApp";
 type Range = "Day" | "Week" | "Month" | "Year";
 type WorkflowMode = "Post" | "Inbox" | "Discovery" | "Settings";
 
@@ -32,11 +42,25 @@ type CalendarItem = {
   date: string;
   time: string;
   status: "Draft" | "Scheduled" | "Posted";
+  sourceTaskId?: string;
+  notes?: string;
 };
 
 type PlannerDragItem = {
   type: "task" | "scheduled";
   id: string;
+};
+
+type PlannerState = {
+  tasks: Task[];
+  items: CalendarItem[];
+};
+
+type LocalMediaPreview = {
+  id: string;
+  url: string;
+  type: "image" | "video" | "file";
+  name: string;
 };
 
 type ConnectedPage = {
@@ -262,12 +286,42 @@ type TikTokMetricsResponse = {
   videosMessage?: string | null;
 };
 
+type WhatsAppMessageMetric = {
+  id: string;
+  direction: "inbound" | "outbound" | "status";
+  from: string | null;
+  to: string | null;
+  text: string | null;
+  mediaType?: string | null;
+  mediaId?: string | null;
+  timestamp: string;
+  status?: string | null;
+};
+
+type WhatsAppMetricsResponse = {
+  ok: boolean;
+  configured: boolean;
+  phoneNumberId?: string | null;
+  businessAccountId?: string | null;
+  messages: WhatsAppMessageMetric[];
+  message?: string | null;
+  webhookPath?: string;
+};
+
+type WhatsAppActionResponse = {
+  ok: boolean;
+  message?: string | null;
+  result?: unknown;
+  mediaId?: string | null;
+};
+
 type LiveMetricsState = {
   meta: MetaMetricsResponse | null;
   instagram: InstagramMetricsResponse | null;
   linkedin: LinkedInMetricsResponse | null;
   threads: ThreadsMetricsResponse | null;
   tiktok: TikTokMetricsResponse | null;
+  whatsapp: WhatsAppMetricsResponse | null;
   loading: boolean;
 };
 
@@ -289,9 +343,10 @@ type ConnectionSummary = {
   tikTokError: string | null;
 };
 
-const tabs: Tab[] = ["Home", "Statistics", "Planning", "Instagram", "Threads", "Facebook", "LinkedIn", "TikTok"];
+const tabs: Tab[] = ["Home", "Statistics", "Planning", "Instagram", "Threads", "Facebook", "LinkedIn", "TikTok", "WhatsApp"];
 const workflowModes: WorkflowMode[] = ["Post", "Inbox", "Discovery", "Settings"];
 const ranges: Range[] = ["Day", "Week", "Month", "Year"];
+const PLANNER_STORAGE_KEY = "socialmedia-dashboard-planner-v2";
 const connectedProfiles = {
   personal: {
     instagram: "@thijs.wijma",
@@ -299,6 +354,7 @@ const connectedProfiles = {
     linkedin: "https://www.linkedin.com/in/thijs-w-74b309192",
     threads: "Personal Threads",
     tiktok: "Personal TikTok",
+    whatsapp: "WhatsApp Business",
   },
   newGlory: {
     instagram: "@new_glory_runningcollective",
@@ -313,6 +369,7 @@ const initialLiveMetrics: LiveMetricsState = {
   linkedin: null,
   threads: null,
   tiktok: null,
+  whatsapp: null,
   loading: true,
 };
 
@@ -574,6 +631,37 @@ async function postInstagramAction(payload: Record<string, unknown>) {
   return json;
 }
 
+async function postWhatsAppAction(payload: Record<string, unknown>) {
+  const res = await fetch("/api/whatsapp/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const json = (await res.json()) as WhatsAppActionResponse;
+
+  if (!res.ok && !json.message) {
+    return { ...json, ok: false, message: "WhatsApp action failed." };
+  }
+
+  return json;
+}
+
+async function uploadWhatsAppMedia(file: File) {
+  const formData = new FormData();
+  formData.set("file", file);
+  const res = await fetch("/api/whatsapp/media", {
+    method: "POST",
+    body: formData,
+  });
+  const json = (await res.json()) as WhatsAppActionResponse;
+
+  if (!res.ok && !json.message) {
+    return { ...json, ok: false, message: "WhatsApp media upload failed." };
+  }
+
+  return json;
+}
+
 function useLiveMetrics(): LiveMetricsState {
   const [metrics, setMetrics] = useState<LiveMetricsState>(initialLiveMetrics);
 
@@ -581,7 +669,7 @@ function useLiveMetrics(): LiveMetricsState {
     let cancelled = false;
 
     async function loadMetrics() {
-      const [meta, instagram, linkedin, threads, tiktok] = await Promise.all([
+      const [meta, instagram, linkedin, threads, tiktok, whatsapp] = await Promise.all([
         fetchJson<MetaMetricsResponse>("/api/meta/metrics").catch((error: Error) => ({
           ok: false,
           message: error.message,
@@ -602,10 +690,16 @@ function useLiveMetrics(): LiveMetricsState {
           ok: false,
           message: error.message,
         })),
+        fetchJson<WhatsAppMetricsResponse>("/api/whatsapp/messages").catch((error: Error) => ({
+          ok: false,
+          configured: false,
+          messages: [],
+          message: error.message,
+        })),
       ]);
 
       if (!cancelled) {
-        setMetrics({ meta, instagram, linkedin, threads, tiktok, loading: false });
+        setMetrics({ meta, instagram, linkedin, threads, tiktok, whatsapp, loading: false });
       }
     }
 
@@ -664,6 +758,10 @@ const initialPlan: CalendarItem[] = [
 export default function DashboardPage({ searchParams }: { searchParams: DashboardSearchParams }) {
   const connectionSummary = parseConnectionSummary(use(searchParams));
   const [activeTab, setActiveTab] = useState<Tab>("Home");
+  const [plannerState, setPlannerState] = useState<PlannerState>({
+    tasks: initialTasks,
+    items: initialPlan,
+  });
 
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top_right,#312e81_0%,#0b1020_35%,#070b16_70%)] p-6 text-slate-100">
@@ -699,15 +797,18 @@ export default function DashboardPage({ searchParams }: { searchParams: Dashboar
         </nav>
 
         {activeTab === "Home" && (
-          <HomeTab {...connectionSummary} />
+          <HomeTab {...connectionSummary} onOpenTab={setActiveTab} />
         )}
         {activeTab === "Statistics" && <StatisticsTab />}
-        {activeTab === "Planning" && <PlanningTab />}
+        {activeTab === "Planning" && (
+          <PlanningTab plannerState={plannerState} setPlannerState={setPlannerState} />
+        )}
         {activeTab === "Instagram" && <InstagramTab />}
         {activeTab === "Threads" && <ThreadsTab />}
         {activeTab === "Facebook" && <FacebookTab />}
         {activeTab === "LinkedIn" && <LinkedInTab />}
         {activeTab === "TikTok" && <TikTokTab />}
+        {activeTab === "WhatsApp" && <WhatsAppTab />}
       </div>
     </main>
   );
@@ -735,6 +836,7 @@ function HomeTab({
   threadsError,
   tikTokConnected,
   tikTokError,
+  onOpenTab,
 }: {
   metaConnected: boolean;
   metaError: string | null;
@@ -749,6 +851,7 @@ function HomeTab({
   threadsError: string | null;
   tikTokConnected: boolean;
   tikTokError: string | null;
+  onOpenTab: (tab: Tab) => void;
 }) {
   const liveMetrics = useLiveMetrics();
   const newGloryMeta = findNewGloryMeta(liveMetrics.meta?.metrics);
@@ -766,6 +869,8 @@ function HomeTab({
   );
   const threadsProfile = liveMetrics.threads?.profile;
   const tikTokUser = liveMetrics.tiktok?.profile?.data?.user;
+  const instagramIsLive = Boolean(personalInstagram || newGloryInstagram);
+  const whatsappConnected = Boolean(liveMetrics.whatsapp?.configured);
   const totalKnownFollowers =
     (personalInstagram?.followersCount ?? 0) +
     (personalMeta?.fbFollowersCount ?? personalMeta?.fbFanCount ?? 0) +
@@ -780,11 +885,12 @@ function HomeTab({
     Boolean(liveMetrics.linkedin?.identity),
     Boolean(threadsProfile),
     Boolean(tikTokUser),
+    whatsappConnected,
   ].filter(Boolean).length;
 
   const kpis = [
     { label: "Known Live Followers", value: liveMetrics.loading ? "Loading..." : formatStat(totalKnownFollowers) },
-    { label: "Connected Sources", value: liveMetrics.loading ? "Loading..." : `${connectedPlatformCount}/5` },
+    { label: "Connected Sources", value: liveMetrics.loading ? "Loading..." : `${connectedPlatformCount}/6` },
     { label: "Live Data Status", value: liveMetrics.loading ? "Loading..." : "Ready" },
   ];
 
@@ -803,9 +909,9 @@ function HomeTab({
         metaConnected={metaConnected}
         metaError={metaError}
         connectedPages={connectedPages}
-        instagramConnected={instagramConnected}
+        instagramConnected={instagramConnected || instagramIsLive}
         instagramProfile={instagramProfile}
-        instagramError={instagramError}
+        instagramError={instagramIsLive ? null : instagramError}
         linkedInConnected={linkedInConnected}
         linkedInError={linkedInError}
         linkedInErrorMessage={linkedInErrorMessage}
@@ -813,6 +919,9 @@ function HomeTab({
         threadsError={threadsError}
         tikTokConnected={tikTokConnected || Boolean(tikTokUser)}
         tikTokError={tikTokError}
+        whatsAppConnected={whatsappConnected}
+        whatsAppMessage={liveMetrics.whatsapp?.message ?? null}
+        onOpenTab={onOpenTab}
       />
 
       <LiveAccountsPanel
@@ -841,6 +950,9 @@ function CompactConnectionPanel({
   threadsError,
   tikTokConnected,
   tikTokError,
+  whatsAppConnected,
+  whatsAppMessage,
+  onOpenTab,
 }: {
   metaConnected: boolean;
   metaError: string | null;
@@ -855,6 +967,9 @@ function CompactConnectionPanel({
   threadsError: string | null;
   tikTokConnected: boolean;
   tikTokError: string | null;
+  whatsAppConnected: boolean;
+  whatsAppMessage: string | null;
+  onOpenTab: (tab: Tab) => void;
 }) {
   const items = [
     {
@@ -862,6 +977,7 @@ function CompactConnectionPanel({
       connected: threadsConnected,
       message: threadsError,
       href: "/api/connect/threads",
+      tab: "Threads" as Tab,
       detail: threadsConnected ? "Connected" : "Connect",
     },
     {
@@ -869,6 +985,7 @@ function CompactConnectionPanel({
       connected: instagramConnected,
       message: instagramError,
       href: "/api/connect/instagram?profile=personal",
+      tab: "Instagram" as Tab,
       detail: instagramConnected ? `${instagramProfile ?? "Account"} connected` : "Connect",
     },
     {
@@ -876,6 +993,7 @@ function CompactConnectionPanel({
       connected: metaConnected,
       message: metaError,
       href: "/api/connect/meta",
+      tab: "Facebook" as Tab,
       detail: metaConnected ? `${connectedPages.length} page${connectedPages.length === 1 ? "" : "s"}` : "Connect",
     },
     {
@@ -883,6 +1001,7 @@ function CompactConnectionPanel({
       connected: linkedInConnected,
       message: linkedInError ? linkedInErrorMessage : null,
       href: "/api/connect/linkedin",
+      tab: "LinkedIn" as Tab,
       detail: linkedInConnected ? "Connected" : "Connect",
     },
     {
@@ -890,7 +1009,16 @@ function CompactConnectionPanel({
       connected: tikTokConnected,
       message: tikTokError,
       href: "/api/connect/tiktok",
+      tab: "TikTok" as Tab,
       detail: tikTokConnected ? "Connected" : "Connect",
+    },
+    {
+      label: "WhatsApp",
+      connected: whatsAppConnected,
+      message: whatsAppMessage,
+      href: "#",
+      tab: "WhatsApp" as Tab,
+      detail: whatsAppConnected ? "Cloud API ready" : "Configure API",
     },
   ].sort((a, b) => Number(b.connected) - Number(a.connected));
 
@@ -902,16 +1030,17 @@ function CompactConnectionPanel({
           {items.filter((item) => item.connected).length}/{items.length} live
         </span>
       </div>
-      <div className="grid gap-2 md:grid-cols-5">
+      <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-6">
         {items.map((item) => (
-          <a
+          <button
             key={item.label}
-            href={item.href}
+            type="button"
+            onClick={() => (item.connected || item.label === "WhatsApp" ? onOpenTab(item.tab) : window.location.assign(item.href))}
             className={`rounded-lg border px-3 py-2 text-sm transition hover:bg-white/10 ${
               item.connected
                 ? "border-emerald-300/20 bg-emerald-400/10"
                 : "border-white/10 bg-black/20"
-            }`}
+            } text-left`}
           >
             <div className="flex items-center justify-between gap-2">
               <span className="font-medium">{item.label}</span>
@@ -920,7 +1049,7 @@ function CompactConnectionPanel({
               </span>
             </div>
             <p className="mt-1 truncate text-xs text-slate-400">{item.message ?? item.detail}</p>
-          </a>
+          </button>
         ))}
       </div>
     </section>
@@ -1282,6 +1411,119 @@ function InstagramPostPreview({
   );
 }
 
+function InstagramDraftPreview({
+  profile,
+  previews,
+  caption,
+  shareType,
+  recentPosts,
+}: {
+  profile: InstagramProfileMetric | null;
+  previews: LocalMediaPreview[];
+  caption: string;
+  shareType: string;
+  recentPosts: InstagramMediaMetric[];
+}) {
+  const primaryPreview = previews[0];
+  const isStory = shareType === "STORIES";
+  const isReel = shareType === "REELS";
+  const username = profile?.username ? `@${profile.username}` : "Instagram account";
+
+  return (
+    <div className="space-y-4 rounded-xl border border-white/10 bg-black/20 p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <ProfileAvatar imageUrl={profile?.profilePictureUrl} label={profile?.username ?? "Instagram"} />
+          <div>
+            <p className="text-sm font-medium">{username}</p>
+            <p className="text-xs text-slate-400">{shareType === "IMAGE" ? "Post preview" : `${shareType.toLowerCase()} preview`}</p>
+          </div>
+        </div>
+        <span className="rounded-full bg-white/10 px-3 py-1 text-xs text-slate-300">
+          {isStory ? "Story" : isReel ? "Reel" : shareType === "CAROUSEL" ? "Carousel" : "Feed"}
+        </span>
+      </div>
+
+      <div className={isStory || isReel ? "mx-auto max-w-64" : ""}>
+        <div
+          className={`overflow-hidden rounded-xl border border-white/10 bg-neutral-950 ${
+            isStory || isReel ? "aspect-[9/16]" : "aspect-square"
+          }`}
+        >
+          {primaryPreview?.type === "image" && (
+            <div className="h-full w-full bg-cover bg-center" style={{ backgroundImage: `url(${primaryPreview.url})` }} />
+          )}
+          {primaryPreview?.type === "video" && (
+            <video src={primaryPreview.url} className="h-full w-full object-cover" controls muted />
+          )}
+          {!primaryPreview && (
+            <div className="flex h-full items-center justify-center px-6 text-center text-sm text-slate-400">
+              Select media to see the Instagram preview.
+            </div>
+          )}
+        </div>
+      </div>
+
+      {previews.length > 1 && (
+        <div className="grid grid-cols-5 gap-2">
+          {previews.slice(0, 10).map((preview) => (
+            <div key={preview.id} className="aspect-square overflow-hidden rounded-md bg-neutral-950">
+              {preview.type === "image" ? (
+                <div className="h-full w-full bg-cover bg-center" style={{ backgroundImage: `url(${preview.url})` }} />
+              ) : (
+                <video src={preview.url} className="h-full w-full object-cover" muted />
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+        <div className="mb-3 flex items-center gap-3">
+          <ProfileAvatar imageUrl={profile?.profilePictureUrl} label={profile?.username ?? "Instagram"} />
+          <div>
+            <p className="font-medium">{profile?.name ?? profile?.username ?? "Profile preview"}</p>
+            <p className="text-xs text-slate-400">
+              {formatCompactStat(profile?.followersCount)} followers · {formatCompactStat(profile?.mediaCount)} posts
+            </p>
+          </div>
+        </div>
+        <div className="grid grid-cols-3 gap-1">
+          {primaryPreview && (
+            <div className="aspect-square overflow-hidden rounded-sm bg-neutral-950 ring-2 ring-violet-300">
+              {primaryPreview.type === "image" ? (
+                <div className="h-full w-full bg-cover bg-center" style={{ backgroundImage: `url(${primaryPreview.url})` }} />
+              ) : (
+                <video src={primaryPreview.url} className="h-full w-full object-cover" muted />
+              )}
+            </div>
+          )}
+          {recentPosts.slice(0, primaryPreview ? 8 : 9).map((post) => {
+            const url = getMediaPreviewUrl(post);
+            return (
+              <div key={post.id} className="aspect-square overflow-hidden rounded-sm bg-neutral-950">
+                {url ? (
+                  <div className="h-full w-full bg-cover bg-center" style={{ backgroundImage: `url(${url})` }} />
+                ) : (
+                  <div className="flex h-full items-center justify-center text-[10px] text-slate-500">
+                    Post
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {caption && (
+        <p className="line-clamp-4 rounded-lg bg-white/5 p-3 text-sm text-slate-200">
+          <span className="font-medium">{username}</span> {caption}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function ExternalPostPreview({
   post,
   platform = "Facebook",
@@ -1489,6 +1731,17 @@ function SocialWorkflowPanel({
   const [query, setQuery] = useState("");
   const [tagValue, setTagValue] = useState("");
   const [shareToInstagram, setShareToInstagram] = useState(false);
+  const [localMediaPreviews, setLocalMediaPreviews] = useState<LocalMediaPreview[]>([]);
+  const selectedInstagramProfile =
+    instagramProfiles.find((profile) => profile.profileGroup === profileGroup) ??
+    instagramProfiles[0] ??
+    null;
+
+  useEffect(() => {
+    return () => {
+      localMediaPreviews.forEach((preview) => URL.revokeObjectURL(preview.url));
+    };
+  }, [localMediaPreviews]);
 
   const inputClass =
     "w-full rounded-md border border-white/10 bg-black/20 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-violet-300";
@@ -1513,6 +1766,30 @@ function SocialWorkflowPanel({
     setBusyAction(null);
   };
 
+  const handleLocalMediaFiles = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    if (!files.length) return;
+
+    setLocalMediaPreviews((prev) => {
+      prev.forEach((preview) => URL.revokeObjectURL(preview.url));
+      return files.slice(0, mediaType === "CAROUSEL" ? 10 : 1).map((file) => ({
+        id: createClientId("media"),
+        url: URL.createObjectURL(file),
+        type: file.type.startsWith("image/")
+          ? "image"
+          : file.type.startsWith("video/")
+            ? "video"
+            : "file",
+        name: file.name,
+      }));
+    });
+
+    const firstFile = files[0];
+    if (platform === "Instagram" && mediaType !== "STORIES" && mediaType !== "REELS" && mediaType !== "CAROUSEL") {
+      setMediaType(firstFile.type.startsWith("video/") ? "VIDEO" : "IMAGE");
+    }
+  };
+
   const submitPost = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
@@ -1534,6 +1811,7 @@ function SocialWorkflowPanel({
       caption,
       mediaType,
       mediaUrl,
+      mediaUrls: mediaUrl,
       altText,
       locationId: secondaryId,
       userTags: tagValue,
@@ -1588,7 +1866,85 @@ function SocialWorkflowPanel({
         </div>
       )}
 
-      {mode === "Post" && (
+      {mode === "Post" && platform === "Instagram" && (
+        <form onSubmit={submitPost} className="grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
+          <div className="space-y-3">
+            <div className="flex flex-wrap gap-2 rounded-xl border border-white/10 bg-black/20 p-2">
+              {[
+                ["IMAGE", "Post"],
+                ["STORIES", "Story"],
+                ["REELS", "Reel"],
+                ["CAROUSEL", "Carousel"],
+              ].map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setMediaType(value)}
+                  className={`rounded-lg px-3 py-2 text-sm ${
+                    mediaType === value ? "bg-violet-500 text-white" : "bg-white/5 text-slate-300 hover:bg-white/10"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <label className="block cursor-pointer rounded-xl border border-dashed border-white/20 bg-black/20 p-4 text-center hover:bg-white/5">
+              <input
+                type="file"
+                accept="image/*,video/*"
+                multiple={mediaType === "CAROUSEL"}
+                onChange={handleLocalMediaFiles}
+                className="hidden"
+              />
+              <span className="text-sm font-medium">Select photo or video from files</span>
+              <span className="mt-1 block text-xs text-slate-400">
+                {localMediaPreviews.length
+                  ? localMediaPreviews.map((preview) => preview.name).join(", ")
+                  : "Use this for preview. Add a public URL below for live publishing."}
+              </span>
+            </label>
+
+            <textarea
+              value={caption}
+              onChange={(event) => setCaption(event.target.value.slice(0, 2200))}
+              className={`${inputClass} min-h-32 resize-y`}
+              placeholder="Write a caption..."
+            />
+
+            <div className="grid gap-2 sm:grid-cols-2">
+              <textarea
+                value={mediaUrl}
+                onChange={(event) => setMediaUrl(event.target.value)}
+                className={`${inputClass} min-h-20 resize-y sm:col-span-2`}
+                placeholder="Public media URL(s) for live publishing, one per line for carousel"
+              />
+              <input value={altText} onChange={(event) => setAltText(event.target.value)} className={inputClass} placeholder="Alt text" />
+              <input value={secondaryId} onChange={(event) => setSecondaryId(event.target.value)} className={inputClass} placeholder="Location ID" />
+              <input
+                value={tagValue}
+                onChange={(event) => setTagValue(event.target.value)}
+                className={`${inputClass} sm:col-span-2`}
+                placeholder="User/product/collab tags JSON"
+              />
+            </div>
+
+            <button disabled={!connected || busyAction === "publish"} className={buttonClass}>
+              {busyAction === "publish" ? "Publishing..." : "Publish to Instagram"}
+            </button>
+          </div>
+
+          <InstagramDraftPreview
+            profile={selectedInstagramProfile}
+            previews={localMediaPreviews}
+            caption={caption}
+            shareType={mediaType}
+            recentPosts={selectedInstagramProfile ? getRegularPosts(selectedInstagramProfile) : []}
+          />
+        </form>
+      )}
+
+      {mode === "Post" && platform === "Threads" && (
         <form onSubmit={submitPost} className="grid gap-3 lg:grid-cols-[1.1fr_0.9fr]">
           <div className="space-y-3">
             <textarea
@@ -1613,14 +1969,7 @@ function SocialWorkflowPanel({
                   <option value="IMAGE">Image</option>
                   <option value="VIDEO">Video</option>
                 </>
-              ) : (
-                <>
-                  <option value="IMAGE">Image</option>
-                  <option value="VIDEO">Video</option>
-                  <option value="REELS">Reel</option>
-                  <option value="STORIES">Story</option>
-                </>
-              )}
+              ) : null}
             </select>
             <input value={mediaUrl} onChange={(event) => setMediaUrl(event.target.value)} className={inputClass} placeholder="Public media URL" />
             <input value={altText} onChange={(event) => setAltText(event.target.value)} className={inputClass} placeholder="Alt text" />
@@ -2502,6 +2851,204 @@ function TikTokTab() {
   );
 }
 
+function WhatsAppTab() {
+  const liveMetrics = useLiveMetrics();
+  const [messages, setMessages] = useState<WhatsAppMessageMetric[]>([]);
+  const [recipient, setRecipient] = useState("");
+  const [text, setText] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [filePreview, setFilePreview] = useState<LocalMediaPreview | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<WhatsAppActionResponse | null>(null);
+  const whatsapp = liveMetrics.whatsapp;
+
+  const refreshMessages = async () => {
+    const response = await fetchJson<WhatsAppMetricsResponse>("/api/whatsapp/messages").catch((error: Error) => ({
+      ok: false,
+      configured: false,
+      messages: [],
+      message: error.message,
+    }));
+    setMessages(response.messages ?? []);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (filePreview) URL.revokeObjectURL(filePreview.url);
+    };
+  }, [filePreview]);
+
+  const handleFile = (event: ChangeEvent<HTMLInputElement>) => {
+    const nextFile = event.target.files?.[0] ?? null;
+    setFile(nextFile);
+    setFilePreview((prev) => {
+      if (prev) URL.revokeObjectURL(prev.url);
+      if (!nextFile) return null;
+      return {
+        id: createClientId("wa-media"),
+        url: URL.createObjectURL(nextFile),
+        type: nextFile.type.startsWith("image/")
+          ? "image"
+          : nextFile.type.startsWith("video/")
+            ? "video"
+            : "file",
+        name: nextFile.name,
+      };
+    });
+  };
+
+  const sendMessage = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setBusy(true);
+    setResult(null);
+
+    let mediaId: string | null = null;
+    let mediaType: string | null = null;
+    if (file) {
+      const upload = await uploadWhatsAppMedia(file);
+      if (!upload.ok || !upload.mediaId) {
+        setResult(upload);
+        setBusy(false);
+        return;
+      }
+      mediaId = upload.mediaId;
+      mediaType = file.type.startsWith("image/")
+        ? "image"
+        : file.type.startsWith("video/")
+          ? "video"
+          : "document";
+    }
+
+    const response = await postWhatsAppAction({
+      to: recipient,
+      text,
+      mediaId,
+      mediaType,
+      filename: file?.name ?? null,
+    });
+    setResult(response);
+    if (response.ok) {
+      setText("");
+      setFile(null);
+      setFilePreview((prev) => {
+        if (prev) URL.revokeObjectURL(prev.url);
+        return null;
+      });
+      await refreshMessages();
+    }
+    setBusy(false);
+  };
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-5">
+      <PlatformIntro title="WhatsApp" connected={Boolean(whatsapp?.configured)} href="/api/whatsapp/messages" />
+
+      <div className="grid gap-4 lg:grid-cols-[0.95fr_1.05fr]">
+        <PremiumCard>
+          <div className="mb-4">
+            <h2 className="text-lg font-medium">WhatsApp Mini Interface</h2>
+            <p className="mt-1 text-sm text-slate-300">
+              Send text, images, videos, and documents through the WhatsApp Business Cloud API.
+            </p>
+          </div>
+
+          <form onSubmit={sendMessage} className="space-y-3">
+            <input
+              value={recipient}
+              onChange={(event) => setRecipient(event.target.value)}
+              className="w-full rounded-md border border-white/10 bg-black/20 px-3 py-2 text-sm text-slate-100 outline-none focus:border-violet-300"
+              placeholder="Recipient phone number, e.g. 316..."
+            />
+            <textarea
+              value={text}
+              onChange={(event) => setText(event.target.value)}
+              className="min-h-28 w-full resize-y rounded-md border border-white/10 bg-black/20 px-3 py-2 text-sm text-slate-100 outline-none focus:border-violet-300"
+              placeholder="Write a WhatsApp message..."
+            />
+
+            <label className="block cursor-pointer rounded-xl border border-dashed border-white/20 bg-black/20 p-4 text-center hover:bg-white/5">
+              <input type="file" accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt" onChange={handleFile} className="hidden" />
+              <span className="text-sm font-medium">Attach image, video, or file</span>
+              <span className="mt-1 block text-xs text-slate-400">{file?.name ?? "No file selected"}</span>
+            </label>
+
+            {filePreview && (
+              <div className="overflow-hidden rounded-xl border border-white/10 bg-neutral-950">
+                {filePreview.type === "image" && (
+                  <div className="h-64 w-full bg-cover bg-center" style={{ backgroundImage: `url(${filePreview.url})` }} />
+                )}
+                {filePreview.type === "video" && <video src={filePreview.url} className="max-h-64 w-full" controls />}
+                {filePreview.type === "file" && <p className="p-4 text-sm text-slate-300">{filePreview.name}</p>}
+              </div>
+            )}
+
+            <button
+              disabled={!whatsapp?.configured || busy}
+              className="rounded-md bg-violet-500 px-4 py-2 text-sm font-medium text-white hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {busy ? "Sending..." : "Send WhatsApp"}
+            </button>
+          </form>
+
+          {result && (
+            <div className={`mt-4 rounded-md px-3 py-2 text-sm ${result.ok ? "bg-emerald-500/15 text-emerald-100" : "bg-red-500/15 text-red-100"}`}>
+              {result.ok ? "WhatsApp action complete." : result.message ?? "WhatsApp action failed."}
+            </div>
+          )}
+        </PremiumCard>
+
+        <PremiumCard>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-medium">Inbox</h2>
+              <p className="mt-1 text-sm text-slate-300">
+                Webhook path: <span className="font-mono">{whatsapp?.webhookPath ?? "/api/whatsapp/webhook"}</span>
+              </p>
+            </div>
+            <button type="button" onClick={() => void refreshMessages()} className="rounded-md bg-white/10 px-3 py-2 text-sm hover:bg-white/15">
+              Refresh
+            </button>
+          </div>
+
+          {!whatsapp?.configured && (
+            <p className="mb-4 rounded-lg border border-amber-300/20 bg-amber-400/10 p-3 text-sm text-amber-100">
+              {whatsapp?.message ?? "Configure WhatsApp env vars before sending messages."}
+            </p>
+          )}
+
+          <div className="max-h-[520px] space-y-2 overflow-auto pr-1">
+            {(messages.length ? messages : liveMetrics.whatsapp?.messages ?? []).length ? (
+              (messages.length ? messages : liveMetrics.whatsapp?.messages ?? []).map((message) => (
+                <div
+                  key={`${message.id}-${message.timestamp}`}
+                  className={`rounded-xl border border-white/10 p-3 text-sm ${
+                    message.direction === "outbound" ? "ml-10 bg-violet-500/20" : "mr-10 bg-white/5"
+                  }`}
+                >
+                  <div className="mb-1 flex items-center justify-between gap-2 text-xs text-slate-400">
+                    <span>{message.direction === "outbound" ? `To ${message.to}` : `From ${message.from ?? message.to}`}</span>
+                    <span>{formatDate(message.timestamp)}</span>
+                  </div>
+                  <p className="whitespace-pre-wrap text-slate-100">{message.text ?? message.status ?? "Media message"}</p>
+                  {message.mediaType && message.mediaType !== "text" && (
+                    <p className="mt-2 text-xs text-slate-400">
+                      {message.mediaType} · {message.mediaId ?? "media"}
+                    </p>
+                  )}
+                </div>
+              ))
+            ) : (
+              <p className="text-sm text-slate-300">
+                Messages will appear here after the webhook receives inbound messages or after you send from this dashboard.
+              </p>
+            )}
+          </div>
+        </PremiumCard>
+      </div>
+    </motion.div>
+  );
+}
+
 function PlatformIntro({
   title,
   connected,
@@ -2528,11 +3075,19 @@ function PlatformIntro({
   );
 }
 
-function PlanningTab() {
-  const [tasks, setTasks] = useState(initialTasks);
-  const [items, setItems] = useState(initialPlan);
+function PlanningTab({
+  plannerState,
+  setPlannerState,
+}: {
+  plannerState: PlannerState;
+  setPlannerState: Dispatch<SetStateAction<PlannerState>>;
+}) {
+  const { tasks, items } = plannerState;
   const [draggingItem, setDraggingItem] = useState<PlannerDragItem | null>(null);
   const [newTask, setNewTask] = useState("");
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
+  const [plannerLoaded, setPlannerLoaded] = useState(false);
   const [newScheduled, setNewScheduled] = useState({
     title: "",
     platform: "Instagram",
@@ -2550,22 +3105,59 @@ function PlanningTab() {
   }, []);
 
   const plannedItems = items.filter((item) => item.status !== "Draft");
+  const selectedItem = items.find((item) => item.id === selectedItemId) ?? null;
+
+  const savePlanner = (state: PlannerState = { tasks, items }) => {
+    localStorage.setItem(PLANNER_STORAGE_KEY, JSON.stringify(state));
+    setLastSavedAt(new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
+  };
+
+  useEffect(() => {
+    const raw = localStorage.getItem(PLANNER_STORAGE_KEY);
+    let storedState: PlannerState | null = null;
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as Partial<PlannerState>;
+        if (Array.isArray(parsed.tasks) && Array.isArray(parsed.items)) {
+          storedState = { tasks: parsed.tasks as Task[], items: parsed.items as CalendarItem[] };
+        }
+      } catch {
+        localStorage.removeItem(PLANNER_STORAGE_KEY);
+      }
+    }
+    queueMicrotask(() => {
+      if (storedState) setPlannerState(storedState);
+      setPlannerLoaded(true);
+    });
+  }, [setPlannerState]);
+
+  useEffect(() => {
+    if (!plannerLoaded) return;
+    const state = { tasks, items };
+    localStorage.setItem(PLANNER_STORAGE_KEY, JSON.stringify(state));
+    queueMicrotask(() => {
+      setLastSavedAt(new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
+    });
+  }, [tasks, items, plannerLoaded]);
 
   const addTask = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const text = newTask.trim();
     if (!text) return;
 
-    setTasks((prev) => [
+    setPlannerState((prev) => ({
       ...prev,
-      {
-        id: createClientId("task"),
-        text,
-        priority: "Medium",
-        done: false,
-        source: "Manual",
-      },
-    ]);
+      tasks: [
+        ...prev.tasks,
+        {
+          id: createClientId("task"),
+          text,
+          priority: "Medium",
+          done: false,
+          source: "Manual",
+        },
+      ],
+    }));
     setNewTask("");
   };
 
@@ -2574,53 +3166,69 @@ function PlanningTab() {
     const title = newScheduled.title.trim();
     if (!title) return;
 
-    setItems((prev) => [
+    setPlannerState((prev) => ({
       ...prev,
-      {
-        id: createClientId("plan"),
-        title,
-        platform: newScheduled.platform,
-        date: newScheduled.date,
-        time: newScheduled.time,
-        status: "Draft",
-      },
-    ]);
+      items: [
+        ...prev.items,
+        {
+          id: createClientId("plan"),
+          title,
+          platform: newScheduled.platform,
+          date: newScheduled.date,
+          time: newScheduled.time,
+          status: "Draft",
+        },
+      ],
+    }));
     setNewScheduled((prev) => ({ ...prev, title: "" }));
   };
 
   const deleteTask = (id: string) => {
-    setTasks((prev) => prev.filter((task) => task.id !== id));
+    setPlannerState((prev) => ({
+      tasks: prev.tasks.filter((task) => task.id !== id),
+      items: prev.items.filter((item) => item.sourceTaskId !== id),
+    }));
+    if (selectedItem?.sourceTaskId === id) setSelectedItemId(null);
   };
 
   const deleteScheduled = (id: string) => {
-    setItems((prev) => prev.filter((item) => item.id !== id));
+    setPlannerState((prev) => ({
+      ...prev,
+      items: prev.items.filter((item) => item.id !== id),
+    }));
+    if (selectedItemId === id) setSelectedItemId(null);
   };
 
   const onDropDay = (date: string) => {
     if (!draggingItem) return;
 
     if (draggingItem.type === "scheduled") {
-      setItems((prev) =>
-        prev.map((item) =>
+      setPlannerState((prev) => ({
+        ...prev,
+        items: prev.items.map((item) =>
           item.id === draggingItem.id ? { ...item, date, status: "Scheduled" } : item
-        )
-      );
+        ),
+      }));
     }
 
     if (draggingItem.type === "task") {
       const task = tasks.find((item) => item.id === draggingItem.id);
       if (task) {
-        setItems((prev) => [
+        setPlannerState((prev) => ({
           ...prev,
-          {
-            id: createClientId("plan"),
-            title: task.text,
-            platform: "Task",
-            date,
-            time: "09:00",
-            status: "Scheduled",
-          },
-        ]);
+          items: [
+            ...prev.items,
+            {
+              id: createClientId("plan"),
+              title: task.text,
+              platform: "Task",
+              date,
+              time: "09:00",
+              status: "Scheduled",
+              sourceTaskId: task.id,
+            },
+          ],
+        }));
       }
     }
 
@@ -2629,6 +3237,22 @@ function PlanningTab() {
 
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
+      <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/5 p-4 backdrop-blur-xl">
+        <div>
+          <h2 className="text-lg font-medium">Planning</h2>
+          <p className="mt-1 text-sm text-slate-300">
+            Planner state is kept when switching tabs and autosaved in this browser.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => savePlanner()}
+          className="rounded-md bg-violet-500 px-4 py-2 text-sm font-medium hover:bg-violet-400"
+        >
+          {lastSavedAt ? `Saved ${lastSavedAt}` : "Save planner"}
+        </button>
+      </section>
+
       <div className="grid gap-4 lg:grid-cols-2">
         <PremiumCard>
           <div className="mb-4 flex items-center justify-between gap-3">
@@ -2667,11 +3291,12 @@ function PlanningTab() {
                       type="checkbox"
                       checked={task.done}
                       onChange={() =>
-                        setTasks((prev) =>
-                          prev.map((item) =>
+                        setPlannerState((prev) => ({
+                          ...prev,
+                          tasks: prev.tasks.map((item) =>
                             item.id === task.id ? { ...item, done: !item.done } : item
-                          )
-                        )
+                          ),
+                        }))
                       }
                       className="mt-1"
                     />
@@ -2774,15 +3399,55 @@ function PlanningTab() {
               {plannedItems
                 .filter((i) => i.date === day)
                 .map((i) => (
-                  <div key={i.id} className="mt-1 rounded bg-violet-500/30 px-1 py-1">
+                  <button
+                    key={i.id}
+                    type="button"
+                    onClick={() => setSelectedItemId(i.id)}
+                    className="mt-1 w-full rounded bg-violet-500/30 px-1 py-1 text-left hover:bg-violet-400/40"
+                  >
                     <p className="truncate font-medium">{i.platform}</p>
                     <p className="truncate text-[10px] text-slate-200">{i.title}</p>
-                  </div>
+                  </button>
                 ))}
             </div>
           ))}
         </div>
       </PremiumCard>
+
+      {selectedItem && (
+        <PremiumCard>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-xs uppercase text-slate-400">Calendar details</p>
+              <h2 className="mt-1 text-xl font-medium">{selectedItem.title}</h2>
+              <p className="mt-2 text-sm text-slate-300">
+                {selectedItem.platform} · {selectedItem.date} at {selectedItem.time} · {selectedItem.status}
+              </p>
+              {selectedItem.sourceTaskId && (
+                <p className="mt-2 text-xs text-slate-400">
+                  Linked to task: {tasks.find((task) => task.id === selectedItem.sourceTaskId)?.text ?? "Deleted task"}
+                </p>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setSelectedItemId(null)}
+                className="rounded-md bg-white/10 px-3 py-2 text-sm hover:bg-white/15"
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                onClick={() => deleteScheduled(selectedItem.id)}
+                className="rounded-md bg-red-500/80 px-3 py-2 text-sm font-medium text-white hover:bg-red-400"
+              >
+                Delete from calendar
+              </button>
+            </div>
+          </div>
+        </PremiumCard>
+      )}
     </motion.div>
   );
 }

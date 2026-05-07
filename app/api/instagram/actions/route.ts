@@ -42,6 +42,7 @@ type InstagramActionBody = {
   caption?: string;
   mediaType?: string;
   mediaUrl?: string;
+  mediaUrls?: string;
   altText?: string;
   locationId?: string;
   productTags?: string;
@@ -199,17 +200,103 @@ function addOptionalJsonParam(
   }
 }
 
+function parseMediaUrls(body: InstagramActionBody) {
+  const raw = getString(body.mediaUrls) ?? getString(body.mediaUrl);
+  if (!raw) return [];
+
+  return raw
+    .split(/[\n,]+/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+function isLikelyVideoUrl(url: string) {
+  return /\.(mp4|mov|m4v)(\?|$)/i.test(url);
+}
+
+async function createMediaContainer(
+  profile: StoredInstagramProfile,
+  params: Record<string, string | number | boolean>,
+  fallbackMessage = "Instagram media container creation failed."
+) {
+  return graphRequest(
+    INSTAGRAM_GRAPH_ORIGIN,
+    `${profile.instagramUserId}/media`,
+    profile.accessToken,
+    {
+      method: "POST",
+      params,
+      fallbackMessage,
+    }
+  );
+}
+
 async function publishInstagram(profile: StoredInstagramProfile, body: InstagramActionBody) {
   const mediaType = (getString(body.mediaType) ?? "IMAGE").toUpperCase();
-  const mediaUrl = getString(body.mediaUrl);
+  const mediaUrls = parseMediaUrls(body);
+  const mediaUrl = mediaUrls[0];
   const caption = getString(body.caption) ?? "";
 
-  if (!["IMAGE", "VIDEO", "REELS", "STORIES"].includes(mediaType)) {
-    return badRequest("Instagram media type must be IMAGE, VIDEO, REELS, or STORIES.");
+  if (!["IMAGE", "VIDEO", "REELS", "STORIES", "CAROUSEL"].includes(mediaType)) {
+    return badRequest("Instagram media type must be IMAGE, VIDEO, REELS, STORIES, or CAROUSEL.");
   }
 
   if (!mediaUrl) {
     return badRequest("A public image or video URL is required for Instagram publishing.");
+  }
+
+  if (mediaType === "CAROUSEL") {
+    if (mediaUrls.length < 2) {
+      return badRequest("Carousel publishing requires at least two public media URLs.");
+    }
+
+    const childContainers = await Promise.all(
+      mediaUrls.slice(0, 10).map((url) =>
+        createMediaContainer(profile, {
+          is_carousel_item: true,
+          ...(isLikelyVideoUrl(url) ? { video_url: url } : { image_url: url }),
+        })
+      )
+    );
+    const failedChild = childContainers.find((container) => !container.ok || !container.data.id);
+    if (failedChild) return jsonResult(failedChild, "publish");
+
+    const params: Record<string, string | number | boolean> = {
+      caption,
+      media_type: "CAROUSEL",
+      children: childContainers.map((container) => container.data.id).join(","),
+    };
+    if (getString(body.locationId)) params.location_id = getString(body.locationId) as string;
+    addOptionalJsonParam(params, "product_tags", getString(body.productTags));
+    addOptionalJsonParam(params, "user_tags", getString(body.userTags));
+    addOptionalJsonParam(params, "collaborators", getString(body.collaborators));
+
+    const container = await createMediaContainer(profile, params);
+    if (!container.ok || !container.data.id) return jsonResult(container, "publish");
+
+    const published = await graphRequest(
+      INSTAGRAM_GRAPH_ORIGIN,
+      `${profile.instagramUserId}/media_publish`,
+      profile.accessToken,
+      {
+        method: "POST",
+        params: { creation_id: container.data.id },
+        fallbackMessage: "Instagram carousel publish failed.",
+      }
+    );
+
+    return NextResponse.json(
+      {
+        ok: published.ok,
+        action: "publish",
+        children: childContainers.map((container) => container.data),
+        container: container.data,
+        published: published.data,
+        postId: published.data.id ?? null,
+        message: published.message,
+      },
+      { status: published.ok ? 200 : published.status || 400 }
+    );
   }
 
   const params: Record<string, string | number | boolean> = { caption };
@@ -220,7 +307,7 @@ async function publishInstagram(profile: StoredInstagramProfile, body: Instagram
     params.media_type = "REELS";
   }
   if (mediaType === "STORIES") {
-    if (mediaUrl.match(/\.(mp4|mov)(\?|$)/i)) {
+    if (isLikelyVideoUrl(mediaUrl)) {
       params.video_url = mediaUrl;
     } else {
       params.image_url = mediaUrl;
@@ -236,16 +323,7 @@ async function publishInstagram(profile: StoredInstagramProfile, body: Instagram
   addOptionalJsonParam(params, "user_tags", getString(body.userTags));
   addOptionalJsonParam(params, "collaborators", getString(body.collaborators));
 
-  const container = await graphRequest(
-    INSTAGRAM_GRAPH_ORIGIN,
-    `${profile.instagramUserId}/media`,
-    profile.accessToken,
-    {
-      method: "POST",
-      params,
-      fallbackMessage: "Instagram media container creation failed.",
-    }
-  );
+  const container = await createMediaContainer(profile, params);
 
   if (!container.ok || !container.data.id) {
     return jsonResult(container, "publish");
