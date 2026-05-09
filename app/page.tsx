@@ -273,7 +273,9 @@ type InstagramActionResponse = ThreadsActionResponse;
 type TikTokMetricsResponse = {
   ok: boolean;
   message?: string;
+  source?: string;
   scope?: string;
+  publicProfiles?: TikTokPublicProfileMetric[];
   profile?: {
     data?: {
       user?: {
@@ -288,6 +290,36 @@ type TikTokMetricsResponse = {
     videos?: Array<{ id?: string }>;
   } | null;
   videosMessage?: string | null;
+};
+
+type TikTokPublicProfileMetric = {
+  ok: boolean;
+  source: "public";
+  handle: string;
+  url: string;
+  displayName: string | null;
+  avatarUrl: string | null;
+  bio: string | null;
+  verified: boolean;
+  followerCount: number | null;
+  followingCount: number | null;
+  likeCount: number | null;
+  videoCount: number | null;
+  videos: TikTokPublicVideoMetric[];
+  fetchedAt: string;
+  message: string | null;
+};
+
+type TikTokPublicVideoMetric = {
+  id: string;
+  description: string | null;
+  createdAt: string | null;
+  coverUrl: string | null;
+  url: string | null;
+  viewCount: number | null;
+  likeCount: number | null;
+  commentCount: number | null;
+  shareCount: number | null;
 };
 
 type WhatsAppMessageMetric = {
@@ -937,7 +969,26 @@ function hasThreadsLiveData(metrics: ThreadsMetricsResponse | null) {
 }
 
 function hasTikTokLiveData(metrics: TikTokMetricsResponse | null) {
-  return Boolean(metrics?.profile?.data?.user && metrics.videos?.videos?.length);
+  return Boolean(
+    metrics?.publicProfiles?.some((profile) => profile.ok) ||
+      (metrics?.profile?.data?.user && metrics.videos?.videos?.length)
+  );
+}
+
+function tikTokPublicVideoToExternalPost(video: TikTokPublicVideoMetric): ExternalContentMetric {
+  return {
+    id: video.id,
+    message: video.description,
+    createdTime: video.createdAt,
+    permalinkUrl: video.url,
+    pictureUrl: video.coverUrl,
+    viewCount: video.viewCount,
+    likeCount: video.likeCount,
+    commentCount: video.commentCount,
+    shareCount: video.shareCount,
+    engagementCount:
+      (video.likeCount ?? 0) + (video.commentCount ?? 0) + (video.shareCount ?? 0),
+  };
 }
 
 function hasWhatsAppLiveData(metrics: WhatsAppMetricsResponse | null) {
@@ -1541,16 +1592,42 @@ function LiveAccountsPanel({
         )}
 
         {showTikTok && (
-          <AccountStatCard
-          group="Personal"
-          platform="TikTok"
-          account={tikTokUser?.display_name ?? connectedProfiles.personal.tiktok}
-          status={tikTokUser ? "Connected" : "Connect TikTok"}
-          stats={[
-            ["Open ID", tikTokUser?.open_id ?? "n/a"],
-            ["Videos", liveMetrics.tiktok?.videos?.videos?.length?.toString() ?? liveMetrics.tiktok?.videosMessage ?? "n/a"],
-          ]}
-          />
+          liveMetrics.tiktok?.publicProfiles?.some((profile) => profile.ok) ? (
+            liveMetrics.tiktok.publicProfiles
+              .filter((profile) => profile.ok)
+              .map((profile) => (
+                <AccountStatCard
+                  key={profile.handle}
+                  group={profile.handle.includes("new.glory") ? "New Glory" : "Personal"}
+                  platform="TikTok"
+                  account={`@${profile.handle}`}
+                  status="Public live"
+                  href={profile.url}
+                  avatarUrl={profile.avatarUrl}
+                  stats={[
+                    ["Followers", formatStat(profile.followerCount)],
+                    ["Following", formatStat(profile.followingCount)],
+                    ["Likes", formatStat(profile.likeCount)],
+                    ["Videos", formatStat(profile.videoCount)],
+                    ["Fetched", formatDate(profile.fetchedAt)],
+                  ]}
+                  externalPosts={profile.videos.map(tikTokPublicVideoToExternalPost)}
+                  externalPostsPlatform="TikTok"
+                  insightsMessage={profile.message}
+                />
+              ))
+          ) : (
+            <AccountStatCard
+              group="Personal"
+              platform="TikTok"
+              account={tikTokUser?.display_name ?? connectedProfiles.personal.tiktok}
+              status={tikTokUser ? "Connected" : "Connect TikTok"}
+              stats={[
+                ["Open ID", tikTokUser?.open_id ?? "n/a"],
+                ["Videos", liveMetrics.tiktok?.videos?.videos?.length?.toString() ?? liveMetrics.tiktok?.videosMessage ?? "n/a"],
+              ]}
+            />
+          )
         )}
       </div>
     </PremiumCard>
@@ -1765,11 +1842,13 @@ function ExternalPostPreview({
   platform = "Facebook",
 }: {
   post: ExternalContentMetric;
-  platform?: "Facebook" | "Threads";
+  platform?: "Facebook" | "Threads" | "TikTok";
 }) {
   const secondaryLine =
     platform === "Threads"
       ? `${formatCompactStat(post.viewCount)} views · ${formatCompactStat(post.likeCount)} likes · ${formatCompactStat(post.replyCount)} replies`
+      : platform === "TikTok"
+        ? `${formatCompactStat(post.viewCount)} views · ${formatCompactStat(post.likeCount)} likes · ${formatCompactStat(post.commentCount)} comments`
       : `${formatCompactStat(post.reactionCount)} reactions · ${formatCompactStat(post.commentCount)} comments · ${formatCompactStat(post.shareCount)} shares`;
   const isTextOnlyThreadsPost = platform === "Threads" && !post.pictureUrl;
   const content = (
@@ -1847,7 +1926,7 @@ function AccountStatCard({
   stories?: InstagramMediaMetric[];
   contributorPosts?: InstagramMediaMetric[];
   externalPosts?: ExternalContentMetric[];
-  externalPostsPlatform?: "Facebook" | "Threads";
+  externalPostsPlatform?: "Facebook" | "Threads" | "TikTok";
   postsMessage?: string | null;
   contributorMessage?: string | null;
   insightsMessage?: string | null;
@@ -3173,12 +3252,37 @@ function LinkedInTab() {
 function TikTokTab() {
   const liveMetrics = useLiveMetrics();
   const user = liveMetrics.tiktok?.profile?.data?.user;
+  const publicProfiles = liveMetrics.tiktok?.publicProfiles?.filter((profile) => profile.ok) ?? [];
   const showTikTok = hasTikTokLiveData(liveMetrics.tiktok);
 
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-5">
-      <PlatformIntro title="TikTok" connected={showTikTok} href="/api/connect/tiktok" />
-      {showTikTok ? (
+      <PlatformIntro title="TikTok" connected={showTikTok} href="/api/tiktok/metrics" />
+      {publicProfiles.length ? (
+        <div className="grid gap-4 lg:grid-cols-2">
+          {publicProfiles.map((profile) => (
+            <AccountStatCard
+              key={profile.handle}
+              group={profile.handle.includes("new.glory") ? "New Glory" : "Personal"}
+              platform="TikTok"
+              account={`@${profile.handle}`}
+              status="Public live"
+              href={profile.url}
+              avatarUrl={profile.avatarUrl}
+              stats={[
+                ["Followers", formatStat(profile.followerCount)],
+                ["Following", formatStat(profile.followingCount)],
+                ["Likes", formatStat(profile.likeCount)],
+                ["Videos", formatStat(profile.videoCount)],
+                ["Fetched", formatDate(profile.fetchedAt)],
+              ]}
+              externalPosts={profile.videos.map(tikTokPublicVideoToExternalPost)}
+              externalPostsPlatform="TikTok"
+              insightsMessage={profile.message}
+            />
+          ))}
+        </div>
+      ) : showTikTok ? (
         <AccountStatCard
           group="Personal"
           platform="TikTok"
@@ -3195,7 +3299,7 @@ function TikTokTab() {
       ) : (
         <PremiumCard>
           <p className="text-sm text-slate-300">
-            TikTok is hidden until the account connection can return live profile and video data.
+            TikTok public profile data is loading from the configured profile pages.
           </p>
         </PremiumCard>
       )}
